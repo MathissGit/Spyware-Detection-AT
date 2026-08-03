@@ -30,7 +30,7 @@ if ! command -v virtualbox >/dev/null 2>&1; then
     
     echo "[*] Installation DKMS..."
     apt-get update
-    apt-get install -y dkms build-essential linux-headers-amd64 wget
+    apt-get install -y dkms build-essential linux-headers-$(uname -r) wget
 
     echo "[*] Téléchargement de VirtualBox ${VBOX_VER}..."
     wget -q --show-progress "https://download.virtualbox.org/virtualbox/${VBOX_VER}/VirtualBox-${VBOX_VER}-${VBOX_BUILD}-Linux_amd64.run" -O vbox.run
@@ -129,7 +129,7 @@ chown "$REAL_USER":"$REAL_USER" start_analysis.sh
 if [ "$REQUIRES_REBOOT" = true ]; then
     echo -e "\n[!] Redémarrage système requis pour finaliser l'installation."
     read -p "[>] Appuyez sur Entrée pour redémarrer l'ordinateur immédiatement..."
-    reboot
+    sudo systemctl reboot -i
 else
     echo -e "\n[+] Environnement prêt. Vous pouvez lancer './start_analysis.sh' à la racine."
 fi
