@@ -18,11 +18,11 @@ if [ ! -d ".venv_forensics" ]; then
     echo "[*] Création de l'environnement virtuel Python..."
     python3 -m venv .venv_forensics
     
-    echo "[*] Installation des librairies forensiques (MVT, AES, UI)..."
+    echo "[*] Installation des librairies d'analyse..."
     .venv_forensics/bin/pip install --upgrade pip
     .venv_forensics/bin/pip install mvt pyAesCrypt xhtml2pdf rich questionary
     
-    echo "[*] Initialisation des bases de menaces (IOCs) - Patientez..."
+    echo "[*] Initialisation des bases de menaces (IOCs)..."
     sudo /vagrant/.venv_forensics/bin/mvt-ios download-iocs -f /vagrant/mvt_iocs >/dev/null 2>&1 || true
     sudo /vagrant/.venv_forensics/bin/mvt-android download-iocs -f /vagrant/mvt_iocs >/dev/null 2>&1 || true
 else

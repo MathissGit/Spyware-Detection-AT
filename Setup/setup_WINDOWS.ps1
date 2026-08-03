@@ -12,16 +12,14 @@ if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 
 Set-Location $PSScriptRoot\..
 
-Write-Host "[*] Vérification de l'hôte Windows..." -ForegroundColor Cyan
+Write-Host "[*] Vérification de l'hôte..." -ForegroundColor Cyan
 
 $RequiresReboot = $false
 
 if (-Not (Get-Command vagrant -ErrorAction SilentlyContinue)) {
-    Write-Host "[*] Installation de Vagrant via Winget..."
+    Write-Host "[*] Installation de Vagrant..."
     winget install Hashicorp.Vagrant --accept-source-agreements --accept-package-agreements --silent
     $RequiresReboot = $true
-} else {
-    Write-Host "[+] Vagrant déjà installé." -ForegroundColor Green
 }
 
 $vboxManage = "${env:ProgramFiles}\Oracle\VirtualBox\VBoxManage.exe"
@@ -36,11 +34,11 @@ if (-Not (Test-Path $vboxManage)) {
     Invoke-WebRequest -Uri "https://download.virtualbox.org/virtualbox/$VBOX_VER/VirtualBox-$VBOX_VER-$VBOX_BUILD-Win.exe" -OutFile $vboxExe
     Invoke-WebRequest -Uri "https://download.virtualbox.org/virtualbox/$VBOX_VER/Oracle_VM_VirtualBox_Extension_Pack-$VBOX_VER.vbox-extpack" -OutFile $extPack
     
-    Write-Host "[*] Installation de VirtualBox (Patientez quelques minutes)..."
+    Write-Host "[*] Installation de VirtualBox..."
     Start-Process -FilePath $vboxExe -ArgumentList "--silent", "--ignore-reboot" -Wait
     
     if (Test-Path $vboxManage) {
-        Write-Host "[*] Installation de l'Extension Pack (Support USB)..."
+        Write-Host "[*] Installation de l'Extension Pack..."
         & $vboxManage extpack install --replace --accept-license=33d72d096685826d70eb6d8ed4a781af4657159f8ed53412a8b3017a5ea2f37c $extPack | Out-Null
         $RequiresReboot = $true
     } else {
@@ -50,11 +48,9 @@ if (-Not (Test-Path $vboxManage)) {
     
     Remove-Item $vboxExe -ErrorAction SilentlyContinue
     Remove-Item $extPack -ErrorAction SilentlyContinue
-} else {
-    Write-Host "[+] VirtualBox est déjà installé." -ForegroundColor Green
 }
 
-Write-Host "[*] Vérification des conflits d'hyperviseur (Hyper-V)..."
+Write-Host "[*] Vérification des conflits d'Hyper-V..."
 $hyperv = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -ErrorAction SilentlyContinue
 if ($hyperv.State -eq 'Enabled') {
     Write-Host "`n[!] AVERTISSEMENT : Hyper-V est activé sur votre ordinateur." -ForegroundColor Yellow
@@ -63,7 +59,7 @@ if ($hyperv.State -eq 'Enabled') {
     Write-Host "    Disable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All`n" -ForegroundColor White
 }
 
-Write-Host "[*] Génération du script de lancement sécurisé..."
+Write-Host "[*] Génération du script de lancement start_analysis..."
 
 $ps1Content = @'
 $ErrorActionPreference = "Stop"
@@ -71,7 +67,7 @@ $env:VAGRANT_DEFAULT_PROVIDER="virtualbox"
 $SNAPSHOT_NAME="VM_clean"
 
 function Cleanup {
-    Write-Host "`n[*] Clôture de la session. Sécurisation et extinction de la VM..." -ForegroundColor Yellow
+    Write-Host "`n[*] Clôture de la VM..." -ForegroundColor Yellow
     $vboxManage = "${env:ProgramFiles}\Oracle\VirtualBox\VBoxManage.exe"
     
     $snapshots = vagrant snapshot list 2>&1
@@ -79,14 +75,12 @@ function Cleanup {
         vagrant snapshot restore $SNAPSHOT_NAME *>$null
     }
     vagrant halt -f *>$null
-    
     Stop-Process -Name adb -Force -ErrorAction SilentlyContinue
-    Write-Host "[+] Sandbox immaculée et éteinte. Vos données sont en sécurité." -ForegroundColor Green
 }
 
 try {
     Write-Host "[*] ===================================================" -ForegroundColor Cyan
-    Write-Host "[*] Lancement de l'environnement Forensique Sécurisé" -ForegroundColor Cyan
+    Write-Host "[*] Lancement de l'environnement d'analyse" -ForegroundColor Cyan
     Write-Host "[*] ===================================================" -ForegroundColor Cyan
 
     $vboxManage = "${env:ProgramFiles}\Oracle\VirtualBox\VBoxManage.exe"
@@ -99,19 +93,19 @@ try {
 
     $snapshots = vagrant snapshot list 2>&1
     if ($snapshots -notmatch $SNAPSHOT_NAME) {
-        Write-Host "[*] 1er lancement détecté. Création du Snapshot (Image figée)..."
+        Write-Host "[*] Création du snapshot..."
         vagrant snapshot save $SNAPSHOT_NAME
     } else {
-        Write-Host "[*] Restauration préventive de la VM à son état vierge..."
+        Write-Host "[*] Restauration du snapshot..."
         vagrant snapshot restore $SNAPSHOT_NAME
     }
 
     Write-Host "[+] Environnement isolé prêt et sécurisé." -ForegroundColor Green
     
-    Write-Host "[*] Branchez le téléphone suspect par USB maintenant."
-    Write-Host "[>] Appuyez sur Entrée quand le téléphone est branché (Extinction auto dans 15 min)... " -NoNewline
+    Write-Host "[*] Branchez le téléphone par USB maintenant."
+    Write-Host "[>] Appuyez sur Entrée quand le téléphone est branché... " -NoNewline
 
-    $timeout = 900
+    $timeout = 500
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $key = $null
     while ($stopwatch.Elapsed.TotalSeconds -lt $timeout) {
@@ -123,14 +117,12 @@ try {
     }
 
     if ($null -eq $key -or $key.Key -ne [ConsoleKey]::Enter) {
-        Write-Host "`n[!] Délai d'inactivité dépassé. Arrêt de sécurité du système." -ForegroundColor Red
+        Write-Host "`n[!] Délai d'inactivité dépassé. Arrêt du système." -ForegroundColor Red
         exit
     }
 
     Write-Host "`n[*] Libération du port USB sur l'hôte physique..."
     Stop-Process -Name adb -Force -ErrorAction SilentlyContinue
-
-    Write-Host "[*] Entrée dans la Sandbox..."
     vagrant ssh -c "cd /vagrant && ./sandbox_env.sh"
 
 } finally {
@@ -150,14 +142,14 @@ pause
 '@
 Set-Content -Path "start_analysis.bat" -Value $batContent -Encoding Default
 
-Write-Host "[+] 'start_analysis.bat' généré avec succès à la racine." -ForegroundColor Green
+Write-Host "[+] 'start_analysis.bat' généré avec succès." -ForegroundColor Green
 
 if ($RequiresReboot) {
-    Write-Host "`n[!] Redémarrage système requis pour finaliser l'installation des pilotes USB." -ForegroundColor Red
+    Write-Host "`n[!] Redémarrage système requis pour finaliser l'installation." -ForegroundColor Red
     Write-Host "[>] Appuyez sur Entrée pour redémarrer l'ordinateur immédiatement..." -ForegroundColor Yellow
     Read-Host
     Restart-Computer -Force
 } else {
-    Write-Host "`n[+] Environnement hôte prêt. Pour lancer l'outil par la suite, double-cliquez simplement sur 'start_analysis.bat'." -ForegroundColor Green
+    Write-Host "`n[+] Environnement prêt. Pour lancer l'outil par la suite, double-cliquez simplement sur 'start_analysis.bat'." -ForegroundColor Green
     Pause
 }

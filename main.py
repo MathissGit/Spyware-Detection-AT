@@ -24,7 +24,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 LOCAL_DEST_DIR = os.path.join(SCRIPT_DIR, "results")
 IOCS_DIR = os.path.join(SCRIPT_DIR, "mvt_iocs")
 DATE_STR = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-AES_BUFFER_SIZE = 8 * 1024 * 1024
+AES_BUFFER_SIZE = 32 * 1024 * 1024
 
 console = Console()
 
@@ -40,7 +40,7 @@ def show_banner():
     panel = Panel(
         Text(ascii_art, style="bold cyan", justify="center"),
         title="[bold green]S P Y W A R E  D E T E C T I O N  A U T O M A T E D  T O O L[/bold green]",
-        subtitle="[dim]Automated Forensics with MVT & Direct Storage Encryption[/dim]",
+        subtitle="[dim]Automated Forensics with MVT[/dim]",
         border_style="blue"
     )
     console.print(panel)
@@ -77,8 +77,8 @@ def get_user_inputs():
         device_type = questionary.select(
             "Quel type d'appareil souhaitez-vous analyser ?",
             choices=[
-                questionary.Choice("Android (via AndroidQF)", "1"),
-                questionary.Choice("iOS / iPhone (via idevicebackup2)", "2"),
+                questionary.Choice("Android", "1"),
+                questionary.Choice("iOS / iPhone", "2"),
                 questionary.Choice("-- Quitter l'application --", "EXIT")
             ], style=custom_style).ask()
 
@@ -88,7 +88,7 @@ def get_user_inputs():
             "Où souhaitez-vous sauvegarder l'archive chiffrée ?",
             choices=[
                 questionary.Choice(f"Uniquement en local ({LOCAL_DEST_DIR})", "1"),
-                questionary.Choice("Uniquement sur périphérique externe (Direct Storage)", "2"),
+                questionary.Choice("Uniquement sur un périphérique externe", "2"),
                 questionary.Choice("Les deux (Copie Local + Externe)", "3"),
                 questionary.Choice("-- Retour --", "BACK")
             ], style=custom_style).ask()
@@ -116,7 +116,7 @@ def get_user_inputs():
             if ext_dir == "RESTART": continue
 
         while True:
-            pwd1 = questionary.password("Créez le mot de passe de chiffrement AES-256 (Sécurisation du Dump) :", style=custom_style).ask()
+            pwd1 = questionary.password("Créez le mot de passe de chiffrement AES-256 :", style=custom_style).ask()
             if not pwd1: continue
             pwd2 = questionary.password("Confirmez le mot de passe :", style=custom_style).ask()
             if pwd1 == pwd2: return device_type, dest_choice, ext_dir, pwd1
@@ -216,7 +216,7 @@ def run_ios(password):
     if res.returncode != 0 and "already enabled" not in (res.stderr or res.stdout).lower():
         console.print(f"[bold red][!] Erreur de chiffrement natif iOS.[/bold red]"); sys.exit(1)
 
-    raw_backup_dir = f"ios_raw_backup_{DATE_STR}"
+    raw_backup_dir = f"dump_{device_imei}_{DATE_STR}"
     os.makedirs(raw_backup_dir, exist_ok=True)
     
     console.print("\n[bold cyan][*] Création de la sauvegarde iOS chiffrée (Gardez l'écran allumé)...[/bold cyan]")
@@ -235,7 +235,7 @@ def run_ios(password):
     os.makedirs(mvt_out_dir, exist_ok=True)
     log_file = "mvt_log.txt"
     
-    with console.status("[bold purple]Analyse des IOC en cours (MVT scanne le backup à la volée)...[/bold purple]", spinner="dots"):
+    with console.status("[bold purple]Analyse des IOC en cours...[/bold purple]", spinner="dots"):
         with open(log_file, "w") as f:
             subprocess.run(["mvt-ios", "check-backup", "-p", password, "--fast", "--iocs", IOCS_DIR, "--output", mvt_out_dir, full_backup_path], stdout=f, stderr=subprocess.STDOUT)
             
@@ -245,7 +245,7 @@ def run_ios(password):
 # Post-Processing & Reporting (Strict IOC)
 # ==========================================
 def generate_reports(log_file, imei):
-    console.print("[dim][*] Structuration du rapport d'Intelligence des Menaces...[/dim]")
+    console.print("[dim][*] Structuration du rapport d'analyse...[/dim]")
     
     categories = {
         "Logiciels Espions Ciblés (Pegasus, Predator...)": {
@@ -278,7 +278,7 @@ def generate_reports(log_file, imei):
             "reco": "Ne cliquez sur aucun lien dans vos messages. Ne répondez pas et supprimez le fil de discussion suspect.",
             "alerts": []
         },
-        "Autres Indicateurs STIX2": {
+        "Autres Indicateurs": {
             "keywords": [],
             "desc": "Correspondance stricte avec une base de données de Threat Intelligence (Indicateurs STIX2) nécessitant une analyse experte.",
             "reco": "L'outil a identifié une signature complexe. Analysez les journaux MVT de l'archive chiffrée pour plus de détails.",
@@ -321,7 +321,7 @@ def generate_reports(log_file, imei):
 
     total_alerts = criticals_count + warnings_count
     
-    if total_alerts == 0: status_color, status_text = "#27ae60", "Sain (Aucun Indicateur IOC)"
+    if total_alerts == 0: status_color, status_text = "#27ae60", "Aucun indicateur de compromission détecté"
     elif criticals_count > 0: status_color, status_text = "#e74c3c", "Appareil Compromis"
     else: status_color, status_text = "#f39c12", "Menaces Potentielles"
 
@@ -348,7 +348,7 @@ def generate_reports(log_file, imei):
 
     <table class="dash"><tr>
         <td><div class="val">{total_alerts}</div><div class="lab">Total d'IoC Détectés</div></td>
-        <td><div class="val" style="color:#e74c3c;">{criticals_count}</div><div class="lab">Malwares / Critiques</div></td>
+        <td><div class="val" style="color:#e74c3c;">{criticals_count}</div><div class="lab">Critiques</div></td>
         <td><div class="val" style="color:#f39c12;">{warnings_count}</div><div class="lab">Avertissements</div></td>
     </tr></table>
     
@@ -366,7 +366,7 @@ def generate_reports(log_file, imei):
                 <div class="cat-card">
                     <div class="cat-header">{cat_name} - ({len(cat_data["alerts"])} alertes)</div>
                     <div class="cat-desc"><strong>Explication de la menace :</strong><br/>{cat_data["desc"]}</div>
-                    <div class="cat-reco"><strong>Recommandation de l'analyste :</strong><br/>{cat_data["reco"]}</div>
+                    <div class="cat-reco"><strong>Recommandation :</strong><br/>{cat_data["reco"]}</div>
                     <ul class="cat-alerts">
                 """
                 for sev, alert_text in cat_data["alerts"]:
@@ -415,7 +415,7 @@ def secure_direct_packaging(folders_to_archive, password, dest_choice, ext_dir, 
         progress.update(task_tar, completed=100, total=100)
 
         file_size = os.path.getsize(tar_path)
-        task_aes = progress.add_task("[magenta]Sur-chiffrement AES-256...", total=file_size)
+        task_aes = progress.add_task("[magenta]Chiffrement AES-256...", total=file_size)
         pyAesCrypt.encryptFile(tar_path, enc_path, password, AES_BUFFER_SIZE)
         progress.update(task_aes, completed=file_size)
 
@@ -433,16 +433,15 @@ def secure_direct_packaging(folders_to_archive, password, dest_choice, ext_dir, 
             ext_session = os.path.join(ext_dir, "results", session_name)
             shutil.copytree(primary_dir, ext_session, dirs_exist_ok=True)
 
-    with console.status("[bold yellow]Purge forensique irréversible des dossiers bruts...[/bold yellow]"):
+    with console.status("[bold yellow]Purge des dossiers bruts...[/bold yellow]"):
         for folder in folders_to_delete:
             if os.path.exists(folder): 
                 subprocess.run(["sudo", "rm", "-rf", folder], stderr=subprocess.DEVNULL)
 
     console.print(Panel(
-        f"[bold green]Opération terminée, anonymisée et sécurisée ![/bold green]\n"
+        f"[bold green]Opération terminée ![/bold green]\n"
         f"L'appareil (IMEI: [cyan]{imei}[/cyan]) a été analysé avec succès.\n"
-        f"Seule l'archive chiffrée (.aes) et les rapports finaux sont conservés dans :\n[dim]{primary_dir}[/dim]\n"
-        f"Les dumps bruts en clair ont été intégralement purgés du système.",
+        f"L'archive chiffrée et les rapports d'analyse sont conservés dans :\n[dim]{primary_dir}[/dim]\n",
         border_style="green"
     ))
 

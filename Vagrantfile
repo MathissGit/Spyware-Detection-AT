@@ -5,7 +5,7 @@ Vagrant.configure("2") do |config|
   config.vm.provider "virtualbox" do |vb|
     vb.name = "sandbox_forensics"
     vb.memory = "2048" 
-    vb.cpus = 2
+    vb.cpus = 3
     vb.gui = false
     
     vb.customize ["modifyvm", :id, "--usbxhci", "on"]
