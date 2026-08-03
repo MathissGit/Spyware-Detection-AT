@@ -28,9 +28,9 @@ if ! command -v virtualbox >/dev/null 2>&1; then
     VBOX_VER="7.0.20"
     VBOX_BUILD="163906"
     
-    echo "[*] Installation DKMS..."
+    echo "[*] Installation des prérequis DKMS..."
     apt-get update
-    apt-get install -y dkms build-essential linux-headers-$(uname -r) wget
+    apt-get install -y dkms build-essential linux-headers-$(uname -r) wget libelf-dev libssl-dev
 
     echo "[*] Téléchargement de VirtualBox ${VBOX_VER}..."
     wget -q --show-progress "https://download.virtualbox.org/virtualbox/${VBOX_VER}/VirtualBox-${VBOX_VER}-${VBOX_BUILD}-Linux_amd64.run" -O vbox.run
@@ -39,6 +39,9 @@ if ! command -v virtualbox >/dev/null 2>&1; then
     echo "[*] Compilation et installation..."
     chmod +x vbox.run
     ./vbox.run || true
+
+    echo "[*] Vérification de l'intégration au noyau..."
+    /sbin/vboxconfig || true
 
     if ! command -v vboxmanage >/dev/null 2>&1; then
         echo "[!] L'installation de VirtualBox a échoué. Vérifiez que votre noyau est à jour."
