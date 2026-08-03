@@ -13,6 +13,8 @@ from rich.panel import Panel
 from rich.text import Text
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeElapsedColumn
 import questionary
+import time
+import re
 
 # ==========================================
 # Configuration initiale & UI
@@ -20,9 +22,8 @@ import questionary
 SYSTEM = platform.system()
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 LOCAL_DEST_DIR = os.path.join(SCRIPT_DIR, "results")
+IOCS_DIR = os.path.join(SCRIPT_DIR, "mvt_iocs")
 DATE_STR = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-REPORT_HTML = f"rapport_MVT_{DATE_STR}.html"
-REPORT_PDF = f"rapport_MVT_{DATE_STR}.pdf"
 AES_BUFFER_SIZE = 8 * 1024 * 1024
 
 console = Console()
@@ -39,7 +40,7 @@ def show_banner():
     panel = Panel(
         Text(ascii_art, style="bold cyan", justify="center"),
         title="[bold green]S P Y W A R E  D E T E C T I O N  A U T O M A T E D  T O O L[/bold green]",
-        subtitle="[dim]Automated Forensics with MVT & AndroidQF Wrapper[/dim]",
+        subtitle="[dim]Automated Forensics with MVT & Direct Storage Encryption[/dim]",
         border_style="blue"
     )
     console.print(panel)
@@ -48,12 +49,9 @@ def show_banner():
 def get_external_drives():
     drives = []
     if SYSTEM == "Linux":
-        media_path = f"/media/{os.getenv('USER', '')}"
-        if os.path.exists(media_path):
-            drives = [os.path.join(media_path, d) for d in os.listdir(media_path) if os.path.isdir(os.path.join(media_path, d))]
-        mnt_path = "/mnt"
-        if os.path.exists(mnt_path):
-            drives += [os.path.join(mnt_path, d) for d in os.listdir(mnt_path) if os.path.isdir(os.path.join(mnt_path, d))]
+        for base in ["/media/" + os.getenv('USER', ''), "/mnt"]:
+            if os.path.exists(base):
+                drives += [os.path.join(base, d) for d in os.listdir(base) if os.path.isdir(os.path.join(base, d))]
     elif SYSTEM == "Darwin":
         volumes_path = "/Volumes"
         if os.path.exists(volumes_path):
@@ -64,9 +62,7 @@ def get_external_drives():
         for letter in range(26):
             if bitmask & (1 << letter):
                 drive = f"{chr(65 + letter)}:\\"
-                if drive != "C:\\":
-                    if os.path.exists(drive):
-                        drives.append(drive)
+                if drive != "C:\\" and os.path.exists(drive): drives.append(drive)
     return drives
 
 def get_user_inputs():
@@ -79,329 +75,374 @@ def get_user_inputs():
 
     while True:
         device_type = questionary.select(
-            "Quel type d'appareil cible souhaitez-vous extraire ?",
+            "Quel type d'appareil souhaitez-vous analyser ?",
             choices=[
                 questionary.Choice("Android (via AndroidQF)", "1"),
                 questionary.Choice("iOS / iPhone (via idevicebackup2)", "2"),
                 questionary.Choice("-- Quitter l'application --", "EXIT")
-            ],
-            style=custom_style
-        ).ask()
+            ], style=custom_style).ask()
 
-        if not device_type or device_type == "EXIT":
-            sys.exit(0)
+        if not device_type or device_type == "EXIT": sys.exit(0)
 
         dest_choice = questionary.select(
-            "Où souhaitez-vous sauvegarder l'archive chiffrée finale ?",
+            "Où souhaitez-vous sauvegarder l'archive chiffrée ?",
             choices=[
                 questionary.Choice(f"Uniquement en local ({LOCAL_DEST_DIR})", "1"),
-                questionary.Choice("Uniquement sur un périphérique externe", "2"),
-                questionary.Choice("Les deux (Copie redondante Local + Externe)", "3"),
-                questionary.Choice("-- Retour à l'étape précédente --", "BACK")
-            ],
-            style=custom_style
-        ).ask()
+                questionary.Choice("Uniquement sur périphérique externe (Direct Storage)", "2"),
+                questionary.Choice("Les deux (Copie Local + Externe)", "3"),
+                questionary.Choice("-- Retour --", "BACK")
+            ], style=custom_style).ask()
 
-        if not dest_choice:
-            sys.exit(0)
-        if dest_choice == "BACK":
-            continue
+        if not dest_choice: sys.exit(0)
+        if dest_choice == "BACK": continue
 
         ext_dir = None
         if dest_choice in ["2", "3"]:
             while True:
-                detected_drives = get_external_drives()
-                choices = [questionary.Choice(drive, drive) for drive in detected_drives]
-                choices.append(questionary.Choice("Entrer un autre chemin manuellement...", "MANUAL"))
-                choices.append(questionary.Choice("-- Retour au choix de la destination --", "BACK_DEST"))
-
-                selected_drive = questionary.select(
-                    "Sélectionnez le périphérique externe ou l'action :",
-                    choices=choices,
-                    style=custom_style
-                ).ask()
+                choices = [questionary.Choice(d, d) for d in get_external_drives()]
+                choices.extend([questionary.Choice("Entrer un autre chemin manuellement...", "MANUAL"), questionary.Choice("-- Retour --", "BACK_DEST")])
+                selected_drive = questionary.select("Sélectionnez le périphérique externe :", choices=choices, style=custom_style).ask()
 
                 if not selected_drive or selected_drive == "BACK_DEST":
-                    ext_dir = "RESTART_DEST"
-                    break
-
+                    ext_dir = "RESTART"; break
                 if selected_drive != "MANUAL":
-                    ext_dir = selected_drive
-                    break
-                else:
-                    manual_path = questionary.text("Entrez le chemin absolu du dossier externe (ou tapez 'annuler') :", style=custom_style).ask()
-                    if not manual_path or manual_path.lower() == "annuler":
-                        continue
-                    if os.path.exists(manual_path) and os.path.isdir(manual_path):
-                        ext_dir = manual_path
-                        break
-                    console.print("[bold red][!] Chemin introuvable ou invalide. Réessayez.[/bold red]")
+                    ext_dir = selected_drive; break
+                
+                manual_path = questionary.text("Entrez le chemin absolu du dossier externe :", style=custom_style).ask()
+                if manual_path and os.path.exists(manual_path) and os.path.isdir(manual_path):
+                    ext_dir = manual_path; break
+                console.print("[bold red][!] Chemin introuvable. Réessayez.[/bold red]")
 
-            if ext_dir == "RESTART_DEST":
-                continue
+            if ext_dir == "RESTART": continue
 
         while True:
-            pwd1 = questionary.password("Créez le mot de passe de chiffrement (AES-256) (ou tapez 'retour') :", style=custom_style).ask()
-            if not pwd1 or pwd1.lower() == "retour":
-                pwd1 = "BACK"
-                break
-                
-            pwd2 = questionary.password("Confirmez le mot de passe (ou tapez 'retour') :", style=custom_style).ask()
-            if not pwd2 or pwd2.lower() == "retour":
-                pwd1 = "BACK"
-                break
+            pwd1 = questionary.password("Créez le mot de passe de chiffrement AES-256 (Sécurisation du Dump) :", style=custom_style).ask()
+            if not pwd1: continue
+            pwd2 = questionary.password("Confirmez le mot de passe :", style=custom_style).ask()
+            if pwd1 == pwd2: return device_type, dest_choice, ext_dir, pwd1
+            console.print("[bold red][!] Les mots de passe ne correspondent pas.[/bold red]\n")
 
-            if pwd1 == pwd2 and pwd1:
-                return device_type, dest_choice, ext_dir, pwd1
-            console.print("[bold red][!] Les mots de passe ne correspondent pas. Recommencez.[/bold red]\n")
+def get_bin(binary_name):
+    local_path = f"/usr/local/bin/{binary_name}"
+    return local_path if os.path.exists(local_path) else binary_name
 
-        if pwd1 == "BACK":
-            continue
-
-def start_iocs_background(device_type):
-    cmd = "mvt-android" if device_type == "1" else "mvt-ios"
-    console.print(f"[dim][*] Lancement du thread background pour {cmd} download-iocs...[/dim]")
-    return subprocess.Popen([cmd, "download-iocs"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+def extract_imei(device_type):
+    imei = "UNKNOWN-IMEI"
+    try:
+        if device_type == "1":
+            res = subprocess.run(["sudo", "adb", "shell", "service", "call", "iphonesubinfo", "1"], capture_output=True, text=True, timeout=3)
+            matches = re.findall(r"'([0-9]{15,17})'", res.stdout.replace(".", ""))
+            if matches:
+                imei = matches[0]
+            else:
+                res_fallback = subprocess.run(["sudo", "adb", "shell", "getprop", "ro.serialno"], capture_output=True, text=True, timeout=2)
+                if res_fallback.returncode == 0 and res_fallback.stdout.strip():
+                    imei = res_fallback.stdout.strip()
+        else:
+            local_path = "/usr/local/bin/ideviceinfo"
+            bin_path = local_path if os.path.exists(local_path) else "ideviceinfo"
+            res = subprocess.run([bin_path, "-k", "InternationalMobileEquipmentIdentity"], capture_output=True, text=True, timeout=3)
+            if res.returncode == 0 and res.stdout.strip():
+                imei = res.stdout.strip()
+    except Exception:
+        pass
+    return "".join(c for c in imei if c.isalnum())
 
 # ==========================================
-# Moteurs d'Extraction
+# Moteurs d'Extraction & Analyse
 # ==========================================
-def run_android(mvt_bg_process):
-    if SYSTEM == "Windows":
-        androidqf_bin = next(iter(glob.glob("androidqf*.exe") + ["androidqf.exe"]), "androidqf.exe")
-    else:
-        binaries = [f for f in glob.glob("androidqf*") if os.path.isfile(f) and os.access(f, os.X_OK)]
-        androidqf_bin = f"./{binaries[0]}" if binaries else "./androidqf"
+def run_android():
+    console.print("\n[bold cyan][*] Initialisation du pont USB...[/bold cyan]")
+    subprocess.run(["sudo", "adb", "kill-server"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+    subprocess.run(["sudo", "adb", "start-server"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+    time.sleep(2)
 
+    console.print("[bold cyan][*] Lancement d'AndroidQF...[/bold cyan]")
+    device_imei = extract_imei("1")
+
+    androidqf_bin = next(iter(glob.glob("androidqf*.exe") + ["androidqf.exe"]), "androidqf.exe") if SYSTEM == "Windows" else ("./" + glob.glob("androidqf*")[0] if glob.glob("androidqf*") else "./androidqf")
     dirs_before = set(next(os.walk('.'))[1])
-
-    console.print("\n[bold cyan][*] Lancement d'AndroidQF...[/bold cyan]")
-    console.print("[bold yellow][!] Utilisez les flèches de votre clavier pour répondre aux questions ci-dessous :[/bold yellow]\n")
 
     try:
         subprocess.run([androidqf_bin], check=True)
     except FileNotFoundError:
-        console.print(f"[bold red][!] Erreur : Le binaire {androidqf_bin} est introuvable.[/bold red]")
-        sys.exit(1)
+        console.print(f"[bold red][!] Binaire {androidqf_bin} introuvable.[/bold red]"); sys.exit(1)
 
     new_dirs = set(next(os.walk('.'))[1]) - dirs_before
     if not new_dirs:
-        console.print("[bold red][!] Erreur : Aucun dossier d'extraction n'a été généré.[/bold red]")
-        sys.exit(1)
+        console.print("[bold red][!] Aucun dossier généré.[/bold red]"); sys.exit(1)
 
     dump_dir = list(new_dirs)[0]
-    console.print(f"\n[bold green][+] Extraction terminée :[/bold green] [dim]{dump_dir}[/dim]")
+    if device_imei.startswith("UNKNOWN"): device_imei = extract_imei("1")
 
-    with console.status("[bold yellow]Synchronisation des IOCs MVT...[/bold yellow]", spinner="dots"):
-        mvt_bg_process.wait()
+    console.print(f"[bold green][+] Extraction terminée (IMEI/Serial: {device_imei}).[/bold green]")
 
     mvt_out_dir = f"{dump_dir}_mvt_results"
     os.makedirs(mvt_out_dir, exist_ok=True)
     log_file = "mvt_log.txt"
 
-    with console.status("[bold purple]Analyse heuristique MVT-Android en cours...[/bold purple]", spinner="earth"):
+    with console.status("[bold purple]Analyse des IOC en cours...[/bold purple]", spinner="dots"):
+        files_csv = os.path.join(dump_dir, "files.csv")
+        hidden_files = os.path.join(dump_dir, "_hidden_files.csv")
+        if os.path.exists(files_csv):
+            shutil.move(files_csv, hidden_files)
+
         with open(log_file, "w") as f:
-            subprocess.run(["mvt-android", "check-androidqf", dump_dir, "--output", mvt_out_dir], stdout=f, stderr=subprocess.STDOUT)
+            subprocess.run(["mvt-android", "check-androidqf", dump_dir, "--iocs", IOCS_DIR, "--output", mvt_out_dir], stdout=f, stderr=subprocess.STDOUT)
 
-    return [dump_dir, mvt_out_dir], log_file
+        if os.path.exists(hidden_files):
+            shutil.move(hidden_files, files_csv)
 
-def run_ios(password, mvt_bg_process):
-    console.print("[bold yellow][!] Déverrouillez l'appareil, branchez-le et acceptez l'ordinateur de confiance.[/bold yellow]")
-    subprocess.run(["idevicepair", "pair"], check=False, stdout=subprocess.DEVNULL)
+    return [dump_dir, mvt_out_dir], log_file, device_imei
 
-    console.print("[bold red][!] IMPORTANT : Lors de l'invite sur l'appareil, entrez votre code PIN pour valider le chiffrement de la sauvegarde.[/bold red]")
-    subprocess.run(["idevicebackup2", "-i", "encryption", "on"], stdout=subprocess.DEVNULL)
+def run_ios(password):
+    bin_pair = "/usr/local/bin/idevicepair" if os.path.exists("/usr/local/bin/idevicepair") else "idevicepair"
+    bin_backup = "/usr/local/bin/idevicebackup2" if os.path.exists("/usr/local/bin/idevicebackup2") else "idevicebackup2"
+
+    with console.status("[bold yellow][!] Branchez l'appareil, déverrouillez-le et appuyez sur 'Faire confiance' (Saisissez le PIN)...[/bold yellow]", spinner="dots"):
+        while True:
+            if subprocess.run([bin_pair, "validate"], capture_output=True).returncode == 0: break
+            if subprocess.run([bin_pair, "pair"], capture_output=True).returncode == 0:
+                if subprocess.run([bin_pair, "validate"], capture_output=True).returncode == 0: break
+            time.sleep(2)
+            
+    console.print("[bold green][+] Appareil appairé avec succès.[/bold green]")
+    device_imei = extract_imei("2")
+
+    env = os.environ.copy()
+    env["BACKUP_PASSWORD"] = password
+    
+    res = subprocess.run([bin_backup, "encryption", "on", "-i"], env=env, capture_output=True, text=True)
+    if res.returncode != 0 and "already enabled" not in (res.stderr or res.stdout).lower():
+        console.print(f"[bold red][!] Erreur de chiffrement natif iOS.[/bold red]"); sys.exit(1)
 
     raw_backup_dir = f"ios_raw_backup_{DATE_STR}"
     os.makedirs(raw_backup_dir, exist_ok=True)
-
-    with console.status("[bold cyan]Sauvegarde complète de l'appareil en cours (cela peut prendre plusieurs minutes)...[/bold cyan]", spinner="bouncingBar"):
-        subprocess.run(["idevicebackup2", "backup", "--full", raw_backup_dir], stdout=subprocess.DEVNULL)
-
+    
+    console.print("\n[bold cyan][*] Création de la sauvegarde iOS chiffrée (Gardez l'écran allumé)...[/bold cyan]")
+    try:
+        subprocess.run([bin_backup, "-i", "backup", raw_backup_dir], check=True, env=env)
+    except subprocess.CalledProcessError as e:
+        console.print(f"\n[bold red][!] Échec de la sauvegarde (Code {e.returncode}). Vérifiez le câble et le PIN.[/bold red]"); sys.exit(1)
+            
     try:
         udid_folder = next(os.walk(raw_backup_dir))[1][0]
         full_backup_path = os.path.join(raw_backup_dir, udid_folder)
-    except StopIteration:
-        console.print("[bold red][!] Échec : Aucune sauvegarde trouvée.[/bold red]")
-        sys.exit(1)
-
-    decrypted_dir = f"ios_decrypted_backup_{DATE_STR}"
-    os.makedirs(decrypted_dir, exist_ok=True)
-
-    with console.status("[bold blue]Déchiffrement forensique de l'archive...[/bold blue]"):
-        subprocess.run(["mvt-ios", "decrypt-backup", "-p", password, "-d", decrypted_dir, full_backup_path], stdout=subprocess.DEVNULL)
-
-    with console.status("[bold yellow]Synchronisation des IOCs MVT...[/bold yellow]", spinner="dots"):
-        mvt_bg_process.wait()
-
+    except Exception:
+        console.print("[bold red][!] Échec : Dossier UDID introuvable.[/bold red]"); sys.exit(1)
+        
     mvt_out_dir = f"ios_mvt_results_{DATE_STR}"
     os.makedirs(mvt_out_dir, exist_ok=True)
     log_file = "mvt_log.txt"
-
-    with console.status("[bold purple]Analyse heuristique MVT-iOS en cours...[/bold purple]", spinner="earth"):
+    
+    with console.status("[bold purple]Analyse des IOC en cours (MVT scanne le backup à la volée)...[/bold purple]", spinner="dots"):
         with open(log_file, "w") as f:
-            subprocess.run(["mvt-ios", "check-backup", "--output", mvt_out_dir, decrypted_dir], stdout=f, stderr=subprocess.STDOUT)
-
-    return [decrypted_dir, mvt_out_dir, raw_backup_dir], log_file
+            subprocess.run(["mvt-ios", "check-backup", "-p", password, "--fast", "--iocs", IOCS_DIR, "--output", mvt_out_dir, full_backup_path], stdout=f, stderr=subprocess.STDOUT)
+            
+    return [raw_backup_dir, mvt_out_dir], log_file, device_imei
 
 # ==========================================
-# Post-Processing
+# Post-Processing & Reporting (Strict IOC)
 # ==========================================
-def generate_reports(log_file):
-    console.print("[dim][*] Parsing des logs et structuration du rapport...[/dim]")
-    criticals = []
-    warnings = []
+def generate_reports(log_file, imei):
+    console.print("[dim][*] Structuration du rapport d'Intelligence des Menaces...[/dim]")
+    
+    categories = {
+        "Logiciels Espions Ciblés (Pegasus, Predator...)": {
+            "keywords": ["pegasus", "predator", "finspy", "candiru", "cytrox", "reign"],
+            "desc": "Signature détectée d'un logiciel espion de niveau gouvernemental. L'appareil est la cible d'une surveillance avancée et furtive.",
+            "reco": "DANGER IMMÉDIAT : Mettez l'appareil en Mode Avion. Une simple réinitialisation peut ne pas suffire. Consultez un expert en sécurité.",
+            "alerts": []
+        },
+        "Stalkerwares & Applications Espionnes": {
+            "keywords": ["stalkerware", "mspy", "cerberus", "flexispy", "package", "app", "apk", "bundle"],
+            "desc": "Une application d'espionnage commercial (souvent utilisée pour le harcèlement) correspond à un identifiant (Package Name) de la base d'Amnesty.",
+            "reco": "Désinstallez immédiatement l'application correspondante au nom de paquet affiché. Modifiez tous vos mots de passe depuis un autre appareil.",
+            "alerts": []
+        },
+        "Domaines & Serveurs de Contrôle (C2)": {
+            "keywords": ["domain", "url", "http", "ip address"],
+            "desc": "L'historique Web, DNS ou réseau a révélé des communications vers des serveurs contrôlés par des hackers pour héberger ou commander des malwares.",
+            "reco": "Isolez l'appareil du réseau. Un logiciel espion tente potentiellement d'exfiltrer vos données vers l'infrastructure d'un attaquant.",
+            "alerts": []
+        },
+        "Fichiers & Processus Compromis (Malware)": {
+            "keywords": ["file", "hash", "macho", "binary", "process"],
+            "desc": "L'empreinte cryptographique (Hash) d'un fichier physique ou d'un processus en cours correspond exactement à la signature d'un virus connu.",
+            "reco": "Ne lancez plus de nouvelles applications. Une compromission du système de fichiers est confirmée.",
+            "alerts": []
+        },
+        "Communications Malveillantes (Phishing)": {
+            "keywords": ["sms", "message", "mail", "whatsapp", "telegram", "email", "phone number"],
+            "desc": "Un message ciblé (lien de phishing ou exploit 'Zero-Click') lié à une campagne d'espionnage active a été détecté dans les bases de communication.",
+            "reco": "Ne cliquez sur aucun lien dans vos messages. Ne répondez pas et supprimez le fil de discussion suspect.",
+            "alerts": []
+        },
+        "Autres Indicateurs STIX2": {
+            "keywords": [],
+            "desc": "Correspondance stricte avec une base de données de Threat Intelligence (Indicateurs STIX2) nécessitant une analyse experte.",
+            "reco": "L'outil a identifié une signature complexe. Analysez les journaux MVT de l'archive chiffrée pour plus de détails.",
+            "alerts": []
+        }
+    }
+
+    criticals_count = 0
+    warnings_count = 0
 
     with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
-        lines = f.readlines()
+        for line in f:
+            clean = line.strip()
+            if len(clean) < 10: continue
+            
+            lower_clean = clean.lower()
+            
+            is_ioc_match = any(kw in lower_clean for kw in ["match found", "matched stix2", "matched indicator", "malicious indicator", "indicator match"])
+            
+            if not is_ioc_match:
+                continue
 
-    for line in lines:
-        clean_line = line.strip()
-        if len(clean_line) < 10:
-            continue
-        if any(kw in clean_line for kw in ["CRITICAL", "DETECTED", "Malicious"]):
-            criticals.append(clean_line)
-        elif any(kw in clean_line for kw in ["WARNING", "Match found"]):
-            warnings.append(clean_line)
+            is_crit = "CRITICAL" in clean
+            severity = "CRITIQUE" if is_crit else "ALERTE IOC"
+            
+            if is_crit: criticals_count += 1
+            else: warnings_count += 1
+            
+            matched = False
+            for cat_name, cat_data in categories.items():
+                if cat_name == "Autres Indicateurs STIX2":
+                    continue
+                if any(kw.lower() in clean.lower() for kw in cat_data["keywords"]):
+                    cat_data["alerts"].append((severity, clean))
+                    matched = True
+                    break
+                    
+            if not matched:
+                categories["Autres Indicateurs STIX2"]["alerts"].append((severity, clean))
 
-    total_alerts = len(criticals) + len(warnings)
+    total_alerts = criticals_count + warnings_count
+    
+    if total_alerts == 0: status_color, status_text = "#27ae60", "Sain (Aucun Indicateur IOC)"
+    elif criticals_count > 0: status_color, status_text = "#e74c3c", "Appareil Compromis"
+    else: status_color, status_text = "#f39c12", "Menaces Potentielles"
 
-    if total_alerts == 0:
-        status_color = "#27ae60"
-        status_text = "Sain (Aucune détection majeure)"
-    elif len(criticals) > 0:
-        status_color = "#e74c3c"
-        status_text = "Compromission Possible (Alertes Critiques)"
-    else:
-        status_color = "#f39c12"
-        status_text = "Avertissements (À vérifier manuellement)"
-
-    console.print(f"\n[bold {'red' if total_alerts else 'green'}]{total_alerts} alertes suspectes détectées.[/bold {'red' if total_alerts else 'green'}]")
-
-    html_content = f"""<!DOCTYPE html>
-<html lang="fr">
-<head>
-    <meta charset="UTF-8">
-    <title>Rapport Forensique - MVT</title>
+    html = f"""<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><title>Rapport d'Analyse IoC - IMEI: {imei}</title>
     <style>
-        @page {{ size: A4; margin: 1.5cm; }}
-        body {{ font-family: Helvetica, Arial, sans-serif; font-size: 12px; color: #333; line-height: 1.5; }}
-        h1 {{ color: #2C3E50; border-bottom: 2px solid #3498DB; padding-bottom: 5px; margin-bottom: 15px; }}
-        h2 {{ color: #34495E; margin-top: 30px; border-bottom: 1px solid #BDC3C7; padding-bottom: 3px; font-size: 14px; }}
-        .dashboard {{ width: 100%; border-collapse: collapse; margin-bottom: 20px; }}
-        .dashboard td {{ padding: 15px; border: 1px solid #ECF0F1; text-align: center; width: 33%; background-color: #FAFAFA; }}
-        .metric-value {{ font-size: 24px; font-weight: bold; }}
-        .metric-label {{ font-size: 10px; text-transform: uppercase; color: #7F8C8D; margin-top: 5px; }}
-        .status-box {{ background-color: {status_color}; color: white; padding: 12px; text-align: center; font-weight: bold; font-size: 14px; margin-bottom: 20px; border-radius: 3px; }}
-        .details-table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
-        .details-table th {{ background-color: #ECF0F1; padding: 10px; text-align: left; font-size: 11px; border: 1px solid #BDC3C7; color: #2C3E50; }}
-        .details-table td {{ padding: 10px; border: 1px solid #ECF0F1; font-family: monospace; font-size: 10px; word-wrap: break-word; }}
-        .badge-crit {{ color: #e74c3c; font-weight: bold; text-align: center; }}
-        .badge-warn {{ color: #f39c12; font-weight: bold; text-align: center; }}
-        .no-alerts {{ text-align: center; padding: 20px; color: #27ae60; font-style: italic; border: 1px dashed #27ae60; background-color: #F9FFF9; }}
-    </style>
-</head>
-<body>
-    <h1>Analyse Forensique - MVT</h1>
-    <div class="status-box">STATUT GLOBAL : {status_text.upper()}</div>
-    <table class="dashboard">
-        <tr>
-            <td><div class="metric-value">{total_alerts}</div><div class="metric-label">Total Alertes</div></td>
-            <td><div class="metric-value" style="color: #e74c3c;">{len(criticals)}</div><div class="metric-label">Alertes Critiques</div></td>
-            <td><div class="metric-value" style="color: #f39c12;">{len(warnings)}</div><div class="metric-label">Avertissements</div></td>
-        </tr>
-    </table>
-    <p style="font-size: 11px; color: #7F8C8D;"><strong>Date de l'extraction :</strong> {datetime.datetime.now().strftime('%d/%m/%Y à %H:%M:%S')}</p>
-    <h2>Détail des Detections</h2>
+        @page {{ size: A4; margin: 1.5cm; }} body {{ font-family: sans-serif; font-size: 12px; color: #333; }}
+        h1 {{ color: #2C3E50; border-bottom: 2px solid #3498DB; padding-bottom: 5px; }}
+        .dash {{ width: 100%; border-collapse: collapse; margin-bottom: 20px; }}
+        .dash td {{ padding: 15px; border: 1px solid #ECF0F1; text-align: center; background-color: #FAFAFA; width: 33%; }}
+        .val {{ font-size: 24px; font-weight: bold; }} .lab {{ font-size: 10px; color: #7F8C8D; margin-top: 5px; }}
+        .box {{ background: {status_color}; color: white; padding: 12px; text-align: center; font-weight: bold; font-size: 14px; border-radius: 3px; margin-bottom: 20px; }}
+        .cat-card {{ border: 1px solid #BDC3C7; border-radius: 4px; margin-bottom: 25px; overflow: hidden; }}
+        .cat-header {{ background: #2C3E50; color: white; padding: 10px 15px; font-weight: bold; font-size: 13px; }}
+        .cat-desc {{ padding: 12px 15px; font-size: 11px; background: #ECF0F1; color: #34495E; }}
+        .cat-reco {{ padding: 12px 15px; font-size: 11px; background: #D5F5E3; color: #1E8449; border-top: 1px solid #BDC3C7; }}
+        .cat-alerts {{ padding: 0; margin: 0; list-style-type: none; }}
+        .cat-alerts li {{ padding: 10px 15px; border-top: 1px solid #ECF0F1; font-family: monospace; font-size: 10px; word-wrap: break-word; background: #FFFFFF; }}
+        .crit-text {{ color: #e74c3c; font-weight: bold; }}
+        .warn-text {{ color: #f39c12; font-weight: bold; }}
+    </style></head><body>
+    
+    <h1>Rapport d'Analyse IoC - Appareil (IMEI: {imei})</h1>
+    <div class="box">STATUT : {status_text.upper()}</div>
+
+    <table class="dash"><tr>
+        <td><div class="val">{total_alerts}</div><div class="lab">Total d'IoC Détectés</div></td>
+        <td><div class="val" style="color:#e74c3c;">{criticals_count}</div><div class="lab">Malwares / Critiques</div></td>
+        <td><div class="val" style="color:#f39c12;">{warnings_count}</div><div class="lab">Avertissements</div></td>
+    </tr></table>
+    
+    <p style="font-size: 11px; color: #7F8C8D; margin-bottom: 30px;"><strong>Date de l'analyse :</strong> {datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')}</p>
+    
+    <h2>Détail des Signatures Malveillantes</h2>
     """
 
-    if total_alerts == 0:
-        html_content += '<div class="no-alerts">Aucun indicateur de compromission (IOC) ou alerte majeure n\'a été détecté dans les logs de cette analyse.</div>'
+    if total_alerts == 0: 
+        html += '<div style="text-align:center; padding:20px; color:#27ae60; background:#F9FFF9; border: 1px solid #27ae60;">Aucune trace de logiciel espion, Stalkerware ou signature malveillante connue n\'a été trouvée sur l\'appareil. L\'analyse des IOC est vierge.</div>'
     else:
-        html_content += """
-        <table class="details-table">
-            <thead>
-                <tr><th style="width: 15%; text-align: center;">Sévérité</th><th style="width: 85%;">Description technique de l'alerte</th></tr>
-            </thead>
-            <tbody>
-        """
-        for crit in criticals: html_content += f"<tr><td class='badge-crit'>CRITIQUE</td><td>{crit}</td></tr>"
-        for warn in warnings: html_content += f"<tr><td class='badge-warn'>WARNING</td><td>{warn}</td></tr>"
-        html_content += "</tbody></table>"
+        for cat_name, cat_data in categories.items():
+            if len(cat_data["alerts"]) > 0:
+                html += f"""
+                <div class="cat-card">
+                    <div class="cat-header">{cat_name} - ({len(cat_data["alerts"])} alertes)</div>
+                    <div class="cat-desc"><strong>Explication de la menace :</strong><br/>{cat_data["desc"]}</div>
+                    <div class="cat-reco"><strong>Recommandation de l'analyste :</strong><br/>{cat_data["reco"]}</div>
+                    <ul class="cat-alerts">
+                """
+                for sev, alert_text in cat_data["alerts"]:
+                    color_class = "crit-text" if sev == "CRITIQUE" else "warn-text"
+                    html += f'<li><span class="{color_class}">[{sev}]</span> {alert_text}</li>'
+                
+                html += "</ul></div>"
 
-    html_content += "</body></html>"
+    html += "</body></html>"
 
-    with open(REPORT_HTML, "w", encoding="utf-8") as f:
-        f.write(html_content)
+    report_base = f"Report_{imei}_{DATE_STR}"
+    report_html = f"{report_base}.html"
+    report_pdf = f"{report_base}.pdf"
 
-    with console.status("[bold cyan]Génération du rapport PDF de synthèse...[/bold cyan]", spinner="dots"):
+    with open(report_html, "w", encoding="utf-8") as f: f.write(html)
+    with console.status("[bold cyan]Génération du rapport d'analyse...[/bold cyan]", spinner="dots"):
         try:
-            with open(REPORT_HTML, "r", encoding="utf-8") as source_html:
-                with open(REPORT_PDF, "w+b") as result_pdf:
-                    pisa_status = pisa.CreatePDF(source_html, dest=result_pdf)
-            if pisa_status.err:
-                console.print("[bold red][!] Erreur interne lors de la génération du PDF.[/bold red]")
-        except Exception as e:
-            console.print(f"[bold red][!] Erreur lors de la création du PDF : {e}[/bold red]")
+            with open(report_html, "r", encoding="utf-8") as s_html, open(report_pdf, "w+b") as r_pdf:
+                pisa.CreatePDF(s_html, dest=r_pdf)
+        except Exception as e: console.print(f"[bold red]Erreur PDF : {e}[/bold red]")
+        
+    return report_html, report_pdf
 
-def package_and_encrypt(folders_to_archive, password):
-    tar_file = f"DUMP_SECURE_{DATE_STR}.tar.gz"
-    enc_file = f"{tar_file}.aes"
+# ==========================================
+# Protection & Destruction Sécurisée
+# ==========================================
+def secure_direct_packaging(folders_to_archive, password, dest_choice, ext_dir, imei, folders_to_delete, log_file, html_rep, pdf_rep):
+    session_name = f"Dump_{imei}_{DATE_STR}"
+    
+    if dest_choice == "2" and ext_dir:
+        primary_dir = os.path.join(ext_dir, "results", session_name)
+    else:
+        primary_dir = os.path.join(LOCAL_DEST_DIR, session_name)
+        
+    os.makedirs(primary_dir, exist_ok=True)
+    
+    tar_path = os.path.join(primary_dir, f"{session_name}.tar.gz")
+    enc_path = os.path.join(primary_dir, f"{session_name}.tar.gz.aes")
 
     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), BarColumn(), TaskProgressColumn(), TimeElapsedColumn(), console=console) as progress:
-        task_tar = progress.add_task("[cyan]Création de l'archive brute...", total=None)
-        with tarfile.open(tar_file, "w:gz") as tar:
+        
+        task_tar = progress.add_task(f"[cyan]Création de l'archive (-> {primary_dir})...", total=None)
+        with tarfile.open(tar_path, "w:gz") as tar:
             for folder in folders_to_archive:
-                if os.path.exists(folder):
-                    tar.add(folder, arcname=os.path.basename(folder))
+                if os.path.exists(folder): tar.add(folder, arcname=os.path.basename(folder))
         progress.update(task_tar, completed=100, total=100)
 
-        file_size = os.path.getsize(tar_file)
-        task_aes = progress.add_task("[magenta]Chiffrement AES-256...", total=file_size)
-        pyAesCrypt.encryptFile(tar_file, enc_file, password, AES_BUFFER_SIZE)
+        file_size = os.path.getsize(tar_path)
+        task_aes = progress.add_task("[magenta]Sur-chiffrement AES-256...", total=file_size)
+        pyAesCrypt.encryptFile(tar_path, enc_path, password, AES_BUFFER_SIZE)
         progress.update(task_aes, completed=file_size)
 
-    os.remove(tar_file)
-    return enc_file
+    os.remove(tar_path)
 
-def distribute_and_cleanup(enc_file, dest_choice, ext_dir, folders_to_delete, log_file):
-    session_folder_name = f"Dump_{DATE_STR}"
-    local_session_dir = os.path.join(LOCAL_DEST_DIR, session_folder_name)
-    ext_session_dir = None
-
-    if dest_choice in ["2", "3"] and ext_dir:
-        ext_session_dir = os.path.join(ext_dir, "Secure_Mobile_Dumps", session_folder_name)
-
-    files_to_move = [enc_file, REPORT_HTML]
-    if os.path.exists(REPORT_PDF): files_to_move.append(REPORT_PDF)
-
+    for f in [html_rep, pdf_rep]:
+        if os.path.exists(f): shutil.move(f, os.path.join(primary_dir, f))
+    if os.path.exists(log_file): os.remove(log_file)
+    
     readme_src = os.path.join(SCRIPT_DIR, "README.md")
+    if os.path.exists(readme_src): shutil.copy(readme_src, primary_dir)
 
-    with console.status("[bold yellow]Déploiement et nettoyage sécurisé...[/bold yellow]"):
+    if dest_choice == "3" and ext_dir:
+        with console.status("[bold yellow]Copie redondante vers le stockage externe...[/bold yellow]"):
+            ext_session = os.path.join(ext_dir, "results", session_name)
+            shutil.copytree(primary_dir, ext_session, dirs_exist_ok=True)
 
-        # Local
-        if dest_choice in ["1", "3"]:
-            os.makedirs(local_session_dir, exist_ok=True)
-            for f in files_to_move: shutil.copy(f, local_session_dir)
-            if os.path.exists(readme_src): shutil.copy(readme_src, local_session_dir)
-
-        # Externe
-        if dest_choice in ["2", "3"] and ext_session_dir:
-            os.makedirs(ext_session_dir, exist_ok=True)
-            for f in files_to_move: shutil.copy(f, ext_session_dir)
-            if os.path.exists(readme_src): shutil.copy(readme_src, ext_session_dir)
-
-        # Purge des données
-        for f in files_to_move + [log_file]:
-            if os.path.exists(f): os.remove(f)
+    with console.status("[bold yellow]Purge forensique irréversible des dossiers bruts...[/bold yellow]"):
         for folder in folders_to_delete:
-            if os.path.exists(folder): shutil.rmtree(folder)
+            if os.path.exists(folder): 
+                subprocess.run(["sudo", "rm", "-rf", folder], stderr=subprocess.DEVNULL)
 
     console.print(Panel(
-        f"[bold green]Opération terminée avec succès ![/bold green]\n"
-        f"Les données sont sécurisées et rangées dans le dossier dédié : [cyan]{session_folder_name}[/cyan]\n"
-        f"Les instructions de déchiffrement sont décrites dans le README.\n"
-        f"L'espace de travail temporaire a été purgé.",
+        f"[bold green]Opération terminée, anonymisée et sécurisée ![/bold green]\n"
+        f"L'appareil (IMEI: [cyan]{imei}[/cyan]) a été analysé avec succès.\n"
+        f"Seule l'archive chiffrée (.aes) et les rapports finaux sont conservés dans :\n[dim]{primary_dir}[/dim]\n"
+        f"Les dumps bruts en clair ont été intégralement purgés du système.",
         border_style="green"
     ))
 
@@ -414,15 +455,21 @@ if __name__ == "__main__":
 
     dev_type, dest, ext, pwd = get_user_inputs()
 
-    mvt_bg_process = start_iocs_background(dev_type)
-
     if dev_type == "1":
-        folders, log = run_android(mvt_bg_process)
+        folders, log, imei_val = run_android()
     else:
-        folders, log = run_ios(pwd, mvt_bg_process)
+        folders, log, imei_val = run_ios(pwd)
 
-    generate_reports(log)
-    folders_to_archive = folders[:2]
-
-    file_enc = package_and_encrypt(folders_to_archive, pwd)
-    distribute_and_cleanup(file_enc, dest, ext, folders, log)
+    html_file, pdf_file = generate_reports(log, imei_val)
+    
+    secure_direct_packaging(
+        folders_to_archive=folders[:2],
+        password=pwd,
+        dest_choice=dest,
+        ext_dir=ext,
+        imei=imei_val,
+        folders_to_delete=folders,
+        log_file=log,
+        html_rep=html_file,
+        pdf_rep=pdf_file
+    )

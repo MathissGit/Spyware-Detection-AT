@@ -1,0 +1,12 @@
+.venv_forensics*
+mvt_iocs/
+__pycache__/
+results/
+.vagrant*
+androidqf_*
+to_do.txt
+start_analysis.sh
+start_analysis.ps1
+start_analysis.bat
+*.log
+*.git
