@@ -4,11 +4,14 @@ Vagrant.configure("2") do |config|
   
   config.vm.provider "virtualbox" do |vb|
     vb.name = "sandbox_forensics"
-    vb.memory = "2048" 
-    vb.cpus = 3
+    vb.memory = "4096"
+    vb.cpus = 4
     vb.gui = false
-    
+
     vb.customize ["modifyvm", :id, "--usbxhci", "on"]
+    vb.customize ["modifyvm", :id, "--ioapic", "on"]
+    vb.customize ["modifyvm", :id, "--clipboard-mode", "bidirectional"]
+    vb.customize ["modifyvm", :id, "--draganddrop", "bidirectional"]
     
     vb.customize ["usbfilter", "add", "0", "--target", :id, "--name", "Apple", "--vendorid", "05ac"]
     vb.customize ["usbfilter", "add", "1", "--target", :id, "--name", "Google_Generic", "--vendorid", "18d1"]

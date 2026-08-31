@@ -6,6 +6,9 @@ import shutil
 import platform
 import datetime
 import subprocess
+import time
+import re
+import concurrent.futures
 import pyAesCrypt
 from xhtml2pdf import pisa
 from rich.console import Console
@@ -13,8 +16,6 @@ from rich.panel import Panel
 from rich.text import Text
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeElapsedColumn
 import questionary
-import time
-import re
 
 # ==========================================
 # Configuration initiale & UI
@@ -27,6 +28,25 @@ DATE_STR = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 AES_BUFFER_SIZE = 32 * 1024 * 1024
 
 console = Console()
+
+class PhaseTimer:
+    def __init__(self):
+        self.phases = []
+        self._start = time.monotonic()
+
+    def mark(self, label):
+        now = time.monotonic()
+        elapsed = now - self._start
+        self.phases.append((label, elapsed))
+        self._start = now
+
+    def summary(self):
+        total = sum(t for _, t in self.phases)
+        lines = [f"[dim]{label} : {t:.1f}s[/dim]" for label, t in self.phases]
+        lines.append(f"[bold]Total : {total:.1f}s[/bold]")
+        return "\n".join(lines)
+
+phase_timer = PhaseTimer()
 
 def show_banner():
     ascii_art = """
@@ -116,7 +136,7 @@ def get_user_inputs():
             if ext_dir == "RESTART": continue
 
         while True:
-            pwd1 = questionary.password("Créez le mot de passe de chiffrement AES-256 :", style=custom_style).ask()
+e            pwd1 = questionary.password("Créez le mot d passe de chiffrement AES-256 :", style=custom_style).ask()
             if not pwd1: continue
             pwd2 = questionary.password("Confirmez le mot de passe :", style=custom_style).ask()
             if pwd1 == pwd2: return device_type, dest_choice, ext_dir, pwd1
@@ -139,8 +159,7 @@ def extract_imei(device_type):
                 if res_fallback.returncode == 0 and res_fallback.stdout.strip():
                     imei = res_fallback.stdout.strip()
         else:
-            local_path = "/usr/local/bin/ideviceinfo"
-            bin_path = local_path if os.path.exists(local_path) else "ideviceinfo"
+            bin_path = get_bin("ideviceinfo")
             res = subprocess.run([bin_path, "-k", "InternationalMobileEquipmentIdentity"], capture_output=True, text=True, timeout=3)
             if res.returncode == 0 and res.stdout.strip():
                 imei = res.stdout.strip()
@@ -151,22 +170,30 @@ def extract_imei(device_type):
 # ==========================================
 # Moteurs d'Extraction & Analyse
 # ==========================================
+def _find_androidqf():
+    if SYSTEM == "Windows":
+        candidates = glob.glob("androidqf*.exe")
+        return next(iter(candidates), "androidqf.exe")
+    candidates = glob.glob("androidqf*")
+    return "./" + candidates[0] if candidates else "./androidqf"
+
 def run_android():
     console.print("\n[bold cyan][*] Initialisation du pont USB...[/bold cyan]")
-    subprocess.run(["sudo", "adb", "kill-server"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-    subprocess.run(["sudo", "adb", "start-server"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-    time.sleep(2)
+    t0 = time.monotonic()
+    subprocess.run(["adb", "start-server"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+    phase_timer.mark("ADB start-server")
 
     console.print("[bold cyan][*] Lancement d'AndroidQF...[/bold cyan]")
     device_imei = extract_imei("1")
 
-    androidqf_bin = next(iter(glob.glob("androidqf*.exe") + ["androidqf.exe"]), "androidqf.exe") if SYSTEM == "Windows" else ("./" + glob.glob("androidqf*")[0] if glob.glob("androidqf*") else "./androidqf")
+    androidqf_bin = _find_androidqf()
     dirs_before = set(next(os.walk('.'))[1])
 
     try:
         subprocess.run([androidqf_bin], check=True)
     except FileNotFoundError:
         console.print(f"[bold red][!] Binaire {androidqf_bin} introuvable.[/bold red]"); sys.exit(1)
+    phase_timer.mark("AndroidQF extraction")
 
     new_dirs = set(next(os.walk('.'))[1]) - dirs_before
     if not new_dirs:
@@ -181,64 +208,75 @@ def run_android():
     os.makedirs(mvt_out_dir, exist_ok=True)
     log_file = "mvt_log.txt"
 
-    with console.status("[bold purple]Analyse des IOC en cours...[/bold purple]", spinner="dots"):
-        files_csv = os.path.join(dump_dir, "files.csv")
-        hidden_files = os.path.join(dump_dir, "_hidden_files.csv")
-        if os.path.exists(files_csv):
-            shutil.move(files_csv, hidden_files)
+    console.print("[bold purple][*] Analyse des IOC en cours...[/bold purple]")
+    files_csv = os.path.join(dump_dir, "files.csv")
+    hidden_files = os.path.join(dump_dir, "_hidden_files.csv")
+    if os.path.exists(files_csv):
+        shutil.move(files_csv, hidden_files)
 
+    try:
         with open(log_file, "w") as f:
             subprocess.run(["mvt-android", "check-androidqf", dump_dir, "--iocs", IOCS_DIR, "--output", mvt_out_dir], stdout=f, stderr=subprocess.STDOUT)
-
+    finally:
         if os.path.exists(hidden_files):
             shutil.move(hidden_files, files_csv)
+    phase_timer.mark("MVT Android analyse")
 
     return [dump_dir, mvt_out_dir], log_file, device_imei
 
 def run_ios(password):
-    bin_pair = "/usr/local/bin/idevicepair" if os.path.exists("/usr/local/bin/idevicepair") else "idevicepair"
-    bin_backup = "/usr/local/bin/idevicebackup2" if os.path.exists("/usr/local/bin/idevicebackup2") else "idevicebackup2"
+    bin_pair = get_bin("idevicepair")
+    bin_backup = get_bin("idevicebackup2")
 
     with console.status("[bold yellow][!] Branchez l'appareil, déverrouillez-le et appuyez sur 'Faire confiance' (Saisissez le PIN)...[/bold yellow]", spinner="dots"):
         while True:
             if subprocess.run([bin_pair, "validate"], capture_output=True).returncode == 0: break
             if subprocess.run([bin_pair, "pair"], capture_output=True).returncode == 0:
                 if subprocess.run([bin_pair, "validate"], capture_output=True).returncode == 0: break
-            time.sleep(2)
-            
+            time.sleep(1)
+    phase_timer.mark("Appairage iOS")
+
     console.print("[bold green][+] Appareil appairé avec succès.[/bold green]")
     device_imei = extract_imei("2")
 
     env = os.environ.copy()
     env["BACKUP_PASSWORD"] = password
-    
-    res = subprocess.run([bin_backup, "encryption", "on", "-i"], env=env, capture_output=True, text=True)
-    if res.returncode != 0 and "already enabled" not in (res.stderr or res.stdout).lower():
-        console.print(f"[bold red][!] Erreur de chiffrement natif iOS.[/bold red]"); sys.exit(1)
 
     raw_backup_dir = f"dump_{device_imei}_{DATE_STR}"
     os.makedirs(raw_backup_dir, exist_ok=True)
-    
+
+    res = subprocess.run([bin_backup, "encryption", "on", "-i"], env=env, capture_output=True, text=True)
+    if res.returncode != 0 and "already enabled" not in (res.stderr or res.stdout).lower():
+        console.print(f"[bold red][!] Erreur de chiffrement natif iOS.[/bold red]")
+        shutil.rmtree(raw_backup_dir, ignore_errors=True)
+        sys.exit(1)
+
     console.print("\n[bold cyan][*] Création de la sauvegarde iOS chiffrée (Gardez l'écran allumé)...[/bold cyan]")
     try:
         subprocess.run([bin_backup, "-i", "backup", raw_backup_dir], check=True, env=env)
     except subprocess.CalledProcessError as e:
-        console.print(f"\n[bold red][!] Échec de la sauvegarde (Code {e.returncode}). Vérifiez le câble et le PIN.[/bold red]"); sys.exit(1)
-            
+        console.print(f"\n[bold red][!] Échec de la sauvegarde (Code {e.returncode}). Vérifiez le câble et le PIN.[/bold red]")
+        shutil.rmtree(raw_backup_dir, ignore_errors=True)
+        sys.exit(1)
+    phase_timer.mark("Backup iOS")
+
     try:
         udid_folder = next(os.walk(raw_backup_dir))[1][0]
         full_backup_path = os.path.join(raw_backup_dir, udid_folder)
     except Exception:
-        console.print("[bold red][!] Échec : Dossier UDID introuvable.[/bold red]"); sys.exit(1)
-        
+        console.print("[bold red][!] Échec : Dossier UDID introuvable.[/bold red]")
+        shutil.rmtree(raw_backup_dir, ignore_errors=True)
+        sys.exit(1)
+
     mvt_out_dir = f"ios_mvt_results_{DATE_STR}"
     os.makedirs(mvt_out_dir, exist_ok=True)
     log_file = "mvt_log.txt"
-    
-    with console.status("[bold purple]Analyse des IOC en cours...[/bold purple]", spinner="dots"):
-        with open(log_file, "w") as f:
-            subprocess.run(["mvt-ios", "check-backup", "-p", password, "--fast", "--iocs", IOCS_DIR, "--output", mvt_out_dir, full_backup_path], stdout=f, stderr=subprocess.STDOUT)
-            
+
+    console.print("[bold purple][*] Analyse des IOC en cours...[/bold purple]")
+    with open(log_file, "w") as f:
+        subprocess.run(["mvt-ios", "check-backup", "-p", password, "--fast", "--iocs", IOCS_DIR, "--output", mvt_out_dir, full_backup_path], stdout=f, stderr=subprocess.STDOUT)
+    phase_timer.mark("MVT iOS analyse")
+
     return [raw_backup_dir, mvt_out_dir], log_file, device_imei
 
 # ==========================================
@@ -278,7 +316,7 @@ def generate_reports(log_file, imei):
             "reco": "Ne cliquez sur aucun lien dans vos messages. Ne répondez pas et supprimez le fil de discussion suspect.",
             "alerts": []
         },
-        "Autres Indicateurs": {
+        "Autres Indicateurs STIX2": {
             "keywords": [],
             "desc": "Correspondance stricte avec une base de données de Threat Intelligence (Indicateurs STIX2) nécessitant une analyse experte.",
             "reco": "L'outil a identifié une signature complexe. Analysez les journaux MVT de l'archive chiffrée pour plus de détails.",
@@ -311,7 +349,7 @@ def generate_reports(log_file, imei):
             for cat_name, cat_data in categories.items():
                 if cat_name == "Autres Indicateurs STIX2":
                     continue
-                if any(kw.lower() in clean.lower() for kw in cat_data["keywords"]):
+                if any(kw.lower() in lower_clean for kw in cat_data["keywords"]):
                     cat_data["alerts"].append((severity, clean))
                     matched = True
                     break
@@ -382,12 +420,13 @@ def generate_reports(log_file, imei):
     report_pdf = f"{report_base}.pdf"
 
     with open(report_html, "w", encoding="utf-8") as f: f.write(html)
-    with console.status("[bold cyan]Génération du rapport d'analyse...[/bold cyan]", spinner="dots"):
-        try:
-            with open(report_html, "r", encoding="utf-8") as s_html, open(report_pdf, "w+b") as r_pdf:
-                pisa.CreatePDF(s_html, dest=r_pdf)
-        except Exception as e: console.print(f"[bold red]Erreur PDF : {e}[/bold red]")
-        
+    console.print("[bold cyan][*] Génération du rapport PDF...[/bold cyan]")
+    try:
+        with open(report_html, "r", encoding="utf-8") as s_html, open(report_pdf, "w+b") as r_pdf:
+            pisa.CreatePDF(s_html, dest=r_pdf)
+    except Exception as e: console.print(f"[bold red]Erreur PDF : {e}[/bold red]")
+    phase_timer.mark("Rapport HTML/PDF")
+
     return report_html, report_pdf
 
 # ==========================================
@@ -395,48 +434,49 @@ def generate_reports(log_file, imei):
 # ==========================================
 def secure_direct_packaging(folders_to_archive, password, dest_choice, ext_dir, imei, folders_to_delete, log_file, html_rep, pdf_rep):
     session_name = f"Dump_{imei}_{DATE_STR}"
-    
+
     if dest_choice == "2" and ext_dir:
         primary_dir = os.path.join(ext_dir, "results", session_name)
     else:
         primary_dir = os.path.join(LOCAL_DEST_DIR, session_name)
-        
+
     os.makedirs(primary_dir, exist_ok=True)
-    
+
     tar_path = os.path.join(primary_dir, f"{session_name}.tar.gz")
     enc_path = os.path.join(primary_dir, f"{session_name}.tar.gz.aes")
 
     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), BarColumn(), TaskProgressColumn(), TimeElapsedColumn(), console=console) as progress:
-        
+
         task_tar = progress.add_task(f"[cyan]Création de l'archive (-> {primary_dir})...", total=None)
         with tarfile.open(tar_path, "w:gz") as tar:
             for folder in folders_to_archive:
                 if os.path.exists(folder): tar.add(folder, arcname=os.path.basename(folder))
         progress.update(task_tar, completed=100, total=100)
+        phase_timer.mark("Création archive tar.gz")
 
         file_size = os.path.getsize(tar_path)
         task_aes = progress.add_task("[magenta]Chiffrement AES-256...", total=file_size)
         pyAesCrypt.encryptFile(tar_path, enc_path, password, AES_BUFFER_SIZE)
         progress.update(task_aes, completed=file_size)
+        phase_timer.mark("Chiffrement AES-256")
 
     os.remove(tar_path)
 
     for f in [html_rep, pdf_rep]:
         if os.path.exists(f): shutil.move(f, os.path.join(primary_dir, f))
     if os.path.exists(log_file): os.remove(log_file)
-    
-    readme_src = os.path.join(SCRIPT_DIR, "README.md")
-    if os.path.exists(readme_src): shutil.copy(readme_src, primary_dir)
 
     if dest_choice == "3" and ext_dir:
         with console.status("[bold yellow]Copie redondante vers le stockage externe...[/bold yellow]"):
             ext_session = os.path.join(ext_dir, "results", session_name)
             shutil.copytree(primary_dir, ext_session, dirs_exist_ok=True)
+        phase_timer.mark("Copie externe")
 
     with console.status("[bold yellow]Purge des dossiers bruts...[/bold yellow]"):
         for folder in folders_to_delete:
-            if os.path.exists(folder): 
-                subprocess.run(["sudo", "rm", "-rf", folder], stderr=subprocess.DEVNULL)
+            if os.path.exists(folder):
+                shutil.rmtree(folder, ignore_errors=True)
+    phase_timer.mark("Purge temp")
 
     console.print(Panel(
         f"[bold green]Opération terminée ![/bold green]\n"
@@ -460,7 +500,7 @@ if __name__ == "__main__":
         folders, log, imei_val = run_ios(pwd)
 
     html_file, pdf_file = generate_reports(log, imei_val)
-    
+
     secure_direct_packaging(
         folders_to_archive=folders[:2],
         password=pwd,
@@ -472,3 +512,6 @@ if __name__ == "__main__":
         html_rep=html_file,
         pdf_rep=pdf_file
     )
+
+    console.print()
+    console.print(Panel(phase_timer.summary(), title="[bold]Chronologie des performances[/bold]", border_style="dim"))
