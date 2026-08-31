@@ -136,7 +136,7 @@ def get_user_inputs():
             if ext_dir == "RESTART": continue
 
         while True:
-e            pwd1 = questionary.password("Créez le mot d passe de chiffrement AES-256 :", style=custom_style).ask()
+            pwd1 = questionary.password("Créez le mot d passe de chiffrement AES-256 :", style=custom_style).ask()
             if not pwd1: continue
             pwd2 = questionary.password("Confirmez le mot de passe :", style=custom_style).ask()
             if pwd1 == pwd2: return device_type, dest_choice, ext_dir, pwd1

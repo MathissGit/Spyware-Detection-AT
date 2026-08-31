@@ -11,8 +11,8 @@ echo "[*]   Installation du Spyware Detection Automated Tool"
 echo "[*] ==================================================="
 echo ""
 echo "[*] Choisissez le mode d'installation :"
-echo "  1) Sandbox (VM VirtualBox) - Recommande pour l'analyse d'appareils suspects"
-echo "  2) Mode direct              - Installation locale plus rapide, sans isolation"
+echo "  1) Sandbox (VM VirtualBox) - Recommandé pour l'analyse d'appareils suspects"
+echo "  2) Mode direct             - Installation locale plus rapide, sans isolation"
 echo ""
 read -p "[>] Votre choix (1 ou 2) : " MODE_CHOICE
 
@@ -28,7 +28,7 @@ export DEBIAN_FRONTEND=noninteractive
 REQUIRES_REBOOT=false
 
 if [ "$MODE" = "sandbox" ]; then
-    echo "[*] Vérification de l'hôte (sandbox)..."
+    echo "[*] Vérification de l'hôte..."
 
     if ! command -v vagrant >/dev/null 2>&1 || ! vagrant --version | grep -q "2.4"; then
         echo "[*] Installation de la dernière version de Vagrant..."
@@ -125,7 +125,7 @@ if [ "$MODE" = "sandbox" ]; then
         REQUIRES_REBOOT=true
     fi
 
-    echo "[*] Génération du script de lancement start_analysis.sh (sandbox)..."
+    echo "[*] Génération du script de lancement start_analysis.sh..."
     cat << 'SANDBOX_EOF' > start_analysis.sh
 #!/bin/bash
 set -e
@@ -145,7 +145,7 @@ cleanup() {
 trap cleanup EXIT INT TERM HUP
 
 echo "[*] ==================================================="
-echo "[*] Lancement de l'environnement d'analyse (Sandbox)"
+echo "[*] Lancement de l'environnement d'analyse"
 echo "[*] ==================================================="
 
 mkdir -p "$SCRIPT_DIR/mvt_iocs"
@@ -157,13 +157,13 @@ if [ -d "$SCRIPT_DIR/mvt_iocs" ] && [ "$(ls -A "$SCRIPT_DIR/mvt_iocs" 2>/dev/nul
         AGE_HOURS=$(( ($(date +%s) - ${NEWEST_IOC%.*}) / 3600 ))
         if [ "$AGE_HOURS" -lt 168 ]; then
             IOC_STALE=false
-            echo "[*] Bases IOC déjà à jour (${AGE_HOURS}h). Téléchargement ignoré."
+            echo "[*] Bases IOC déjà à jour (${AGE_HOURS}h)."
         fi
     fi
 fi
 
 if [ "$IOC_STALE" = true ]; then
-    echo "[*] Téléchargement des bases IOC sur l'hôte (partagées avec la VM)..."
+    echo "[*] Téléchargement des bases IOC sur l'hôte..."
     if [ ! -d ".venv_forensics" ]; then
         python3 -m venv .venv_forensics
         .venv_forensics/bin/pip install -q mvt
@@ -192,13 +192,13 @@ vagrant ssh -t -c "cd /vagrant && ./sandbox_env.sh"
 SANDBOX_EOF
 
 else
-    echo "[*] Installation en mode direct (sans VM)..."
+    echo "[*] Installation en mode direct..."
 
     echo "[*] Installation des dépendances système..."
     apt-get update
     apt-get install -y python3 python3-venv python3-pip adb libimobiledevice-utils usbmuxd
 
-    echo "[*] Génération du script de lancement start_analysis.sh (direct)..."
+    echo "[*] Génération du script de lancement start_analysis.sh..."
     cat << 'DIRECT_EOF' > start_analysis.sh
 #!/bin/bash
 set -e
@@ -207,7 +207,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 echo "[*] ==================================================="
-echo "[*] Lancement de l'environnement d'analyse (Mode Direct)"
+echo "[*] Lancement de l'environnement d'analyse"
 echo "[*] ==================================================="
 echo "[*] Branchez le téléphone par USB maintenant."
 
