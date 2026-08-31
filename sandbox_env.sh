@@ -12,7 +12,7 @@ if ! command -v adb >/dev/null 2>&1 || ! command -v idevicebackup2 >/dev/null 2>
     sudo apt-get install -y -qq python3-venv python3-pip adb libimobiledevice-utils usbmuxd build-essential python3-dev
 fi
 
-echo "[*] Vérification des bases IOC (miroir hôte)..."
+echo "[*] Vérification des bases IOC..."
 IOC_COUNT=$(find /vagrant/mvt_iocs -type f 2>/dev/null | wc -l)
 if [ "$IOC_COUNT" -gt 0 ]; then
     echo "[+] Bases IOC prêtes depuis l'hôte (${IOC_COUNT} fichiers)."

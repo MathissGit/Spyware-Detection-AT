@@ -1,7 +1,3 @@
-# ====================================================================
-# SCRIPT D'INSTALLATION FORENSIQUE POUR WINDOWS
-# Doit être exécuté en tant qu'Administrateur
-# ====================================================================
 
 if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Host "[!] ERREUR : Vous devez lancer ce script en tant qu'Administrateur." -ForegroundColor Red
@@ -18,7 +14,7 @@ Write-Host "[*] ===================================================" -Foreground
 Write-Host ""
 Write-Host "[*] Choisissez le mode d'installation :" -ForegroundColor Yellow
 Write-Host "  1) Sandbox (VM VirtualBox) - Recommande pour l'analyse d'appareils suspects"
-Write-Host "  2) Mode direct              - Installation locale plus rapide, sans isolation"
+Write-Host "  2) Mode direct             - Installation locale plus rapide, sans isolation"
 Write-Host ""
 $modeChoice = Read-Host "[>] Votre choix (1 ou 2)"
 
@@ -33,7 +29,7 @@ if ($modeChoice -eq "2") {
 $RequiresReboot = $false
 
 if ($mode -eq "sandbox") {
-    Write-Host "[*] Vérification de l'hôte (sandbox)..." -ForegroundColor Cyan
+    Write-Host "[*] Vérification de l'hôte..." -ForegroundColor Cyan
 
     if (-Not (Get-Command vagrant -ErrorAction SilentlyContinue)) {
         Write-Host "[*] Installation de Vagrant..."
@@ -126,7 +122,7 @@ function Cleanup {
 
 try {
     Write-Host "[*] ===================================================" -ForegroundColor Cyan
-    Write-Host "[*] Lancement de l'environnement d'analyse (Sandbox)" -ForegroundColor Cyan
+    Write-Host "[*] Lancement de l'environnement d'analyse" -ForegroundColor Cyan
     Write-Host "[*] ===================================================" -ForegroundColor Cyan
 
     $iocDir = Join-Path $ScriptDir "mvt_iocs"
@@ -139,12 +135,12 @@ try {
         $ageHours = [math]::Floor(((Get-Date) - $newest).TotalHours)
         if ($ageHours -lt 168) {
             $iocStale = $false
-            Write-Host "[*] Bases IOC déjà à jour (${ageHours}h). Téléchargement ignoré." -ForegroundColor Green
+            Write-Host "[*] Bases IOC déjà à jour (${ageHours}h)." -ForegroundColor Green
         }
     }
 
     if ($iocStale) {
-        Write-Host "[*] Téléchargement des bases IOC sur l'hôte (partagées avec la VM)..." -ForegroundColor Cyan
+        Write-Host "[*] Téléchargement des bases IOC sur l'hôte..." -ForegroundColor Cyan
         $venvPath = Join-Path $ScriptDir ".venv_forensics"
         if (-Not (Test-Path $venvPath)) {
             python3 -m venv $venvPath
@@ -193,7 +189,7 @@ try {
     Set-Content -Path "start_analysis.ps1" -Value $ps1Content -Encoding UTF8
 
 } else {
-    Write-Host "[*] Installation en mode direct (sans VM)..." -ForegroundColor Cyan
+    Write-Host "[*] Installation en mode direct..." -ForegroundColor Cyan
 
     Write-Host "[*] Vérification de Python3..."
     if (-Not (Get-Command python3 -ErrorAction SilentlyContinue)) {
@@ -201,7 +197,7 @@ try {
         winget install Python.Python.3.11 --accept-source-agreements --accept-package-agreements --silent
     }
 
-    Write-Host "[*] Vérification de ADB (Android Platform Tools)..."
+    Write-Host "[*] Vérification de ADB..."
     if (-Not (Get-Command adb -ErrorAction SilentlyContinue)) {
         Write-Host "[*] Téléchargement de Android Platform Tools..."
         $adbZip = "$env:TEMP\platform-tools.zip"
@@ -213,13 +209,13 @@ try {
         [Environment]::SetEnvironmentVariable("PATH", "$adbDir;$([Environment]::GetEnvironmentVariable('PATH', 'User'))", 'User')
     }
 
-    Write-Host "[*] Génération du script de lancement start_analysis (direct)..." -ForegroundColor Cyan
+    Write-Host "[*] Génération du script de lancement start_analysis..." -ForegroundColor Cyan
 
     $ps1Content = @'
 $ErrorActionPreference = "Stop"
 
 Write-Host "[*] ===================================================" -ForegroundColor Cyan
-Write-Host "[*] Lancement de l'environnement d'analyse (Mode Direct)" -ForegroundColor Cyan
+Write-Host "[*] Lancement de l'environnement d'analyse" -ForegroundColor Cyan
 Write-Host "[*] ===================================================" -ForegroundColor Cyan
 Write-Host "[*] Branchez le téléphone par USB maintenant."
 Write-Host "[>] Appuyez sur Entrée quand le téléphone est branché... " -NoNewline
