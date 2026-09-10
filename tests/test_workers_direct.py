@@ -219,6 +219,35 @@ class TestAnalysisWorkerRunAndroid:
         assert w.result is not None
         assert w.result["imei"] == "ANDROIDIMEI"
 
+    def test_run_android_mvt_returns_false(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(workers, "SCRIPT_DIR", str(tmp_path))
+        monkeypatch.setattr(workers, "LOCAL_DEST_DIR", str(tmp_path / "results"))
+
+        dump_dir = tmp_path / "dump_real"
+        mvt_dir = tmp_path / "dump_real_mvt_results"
+        mvt_dir.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "mvt_log.txt").write_text("no IoC found\n")
+
+        def fake_run(cmd, **kw):
+            class P:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            if "androidqf" in " ".join(cmd):
+                dump_dir.mkdir(exist_ok=True)
+            return P()
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        monkeypatch.setattr(workers, "_find_androidqf",
+                            lambda: str(tmp_path / "androidqf"))
+        monkeypatch.setattr(workers, "_extract_imei", lambda *a, **k: "ANDROIDIMEI")
+        monkeypatch.setattr(workers, "run_mvt_check", lambda *a, **k: False)
+
+        w = workers.AnalysisWorker("android", "pw", "1")
+        w.run()
+        assert w.result is None
+        assert w.error is None
+
 
 class TestAnalysisWorkerRunIos:
     def test_run_ios_success(self, monkeypatch, tmp_path):
@@ -248,6 +277,33 @@ class TestAnalysisWorkerRunIos:
         assert w.error is None, w.error
         assert w.result is not None
         assert w.result["imei"] == imei_ios
+
+    def test_run_ios_mvt_returns_false(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(workers, "SCRIPT_DIR", str(tmp_path))
+        monkeypatch.setattr(workers, "LOCAL_DEST_DIR", str(tmp_path / "results"))
+        monkeypatch.setattr(workers, "DATE_STR", "2026-01-01_12-00-00")
+
+        imei_ios = "IOSIMEI123"
+        raw_dir = tmp_path / f"dump_{imei_ios}_2026-01-01_12-00-00"
+        raw_dir.mkdir()
+        udid_dir = raw_dir / "UDID123"
+        udid_dir.mkdir()
+
+        def fake_run(cmd, **kw):
+            class P:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return P()
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        monkeypatch.setattr(workers, "_extract_imei", lambda *a, **k: imei_ios)
+        monkeypatch.setattr(workers, "run_mvt_check", lambda *a, **k: False)
+
+        w = workers.AnalysisWorker("ios", "mypass", "1")
+        w.run()
+        assert w.result is None
+        assert w.error is None
 
 
 class TestAnalysisWorkerRunSandbox:
@@ -385,6 +441,10 @@ class TestSecurePackaging:
                    if f.endswith(".aes")]
         assert len(ext_aes) == 1
         assert os.path.exists(primary)
+        ext_session = os.path.join(str(ext), "results")
+        session_name = os.listdir(ext_session)[0]
+        ext_files = os.listdir(os.path.join(ext_session, session_name))
+        assert sorted(ext_files) == sorted(os.listdir(primary))
 
 
 class TestInstallWorker:

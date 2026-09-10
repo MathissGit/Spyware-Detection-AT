@@ -351,6 +351,8 @@ class TestAnalysisPageLogic:
         page._on_activity("running step 1")
         page.update()
         assert "running step 1" in str(page._activity_label.cget("text"))
+        content = page._log_box.get("1.0", "end")
+        assert "running step 1" in content
         page.destroy()
 
     def test_cancel_no_worker(self, root):

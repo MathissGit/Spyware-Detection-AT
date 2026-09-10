@@ -173,18 +173,25 @@ if [ "$SANDBOX" = true ] && [ ! -t 1 ]; then
     exit 0
 fi
 
+# En sandbox, on empêche l'hôte de se mettre en veille pendant l'analyse
+# (VirtualBox suspendrait la VM et couperait la connexion ssh sinon).
+INHIBIT_PREFIX=""
+if [ "$MODE" = "sandbox" ] && command -v systemd-inhibit >/dev/null 2>&1; then
+    INHIBIT_PREFIX="systemd-inhibit --what=sleep "
+fi
+
 if [ "$UI" = "cli" ]; then
     echo "[*] Démarrage de l'outil d'analyse..."
     if [ "$MODE" = "sandbox" ]; then
         # Mode sandbox : interface sur l'hôte, élevation dans la VM (vagrant ssh).
-        PATH="$VENV/bin:$PATH" "$PY" "$ROOT/main.py" --mode "$MODE"
+        PATH="$VENV/bin:$PATH" $INHIBIT_PREFIX "$PY" "$ROOT/main.py" --mode "$MODE"
     else
         sudo PATH="$VENV/bin:$PATH" "$PY" "$ROOT/main.py" --mode "$MODE"
     fi
 else
     echo "[*] Démarrage de l'interface graphique..."
     if [ "$MODE" = "sandbox" ]; then
-        PATH="$VENV/bin:$PATH" "$PY" "$ROOT/gui.py" --mode "$MODE"
+        PATH="$VENV/bin:$PATH" $INHIBIT_PREFIX "$PY" "$ROOT/gui.py" --mode "$MODE"
     else
         sudo PATH="$VENV/bin:$PATH" "$PY" "$ROOT/gui.py" --mode "$MODE"
     fi

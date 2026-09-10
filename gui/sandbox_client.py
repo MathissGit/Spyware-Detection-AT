@@ -66,7 +66,8 @@ class SandboxClient:
         command = f"cd {VM_ROOT} && {safe}"
 
         proc = subprocess.Popen(
-            ["vagrant", "ssh", "-c", command],
+            ["vagrant", "ssh", "-c", command, "--",
+             "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=120"],
             cwd=self._root,
             stdin=subprocess.PIPE if password is not None else subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -105,6 +106,21 @@ class SandboxClient:
                     return None
         return None
 
+    def _vm_state_text(self):
+        """Interroge l'état réel de la VM (best-effort) pour le diagnostic."""
+        try:
+            res = subprocess.run(
+                ["vagrant", "status", "--machine-readable"],
+                cwd=self._root, capture_output=True, text=True, timeout=20,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return "indisponible"
+        for line in (res.stdout or "").splitlines():
+            fields = line.strip().split(",")
+            if len(fields) >= 4 and fields[2] == "state":
+                return fields[3]
+        return "inconnu"
+
     # ------------------------------------------------------------- actions
     def detect_android(self):
         rc, out = self.run("detect-android")
@@ -127,8 +143,13 @@ class SandboxClient:
                            stop_event=stop_event, timeout=timeout)
         data = self.last_json(out)
         if data is None:
+            tail = " | ".join(out.rstrip().splitlines()[-15:]) or "(aucune sortie)"
+            state = self._vm_state_text()
             raise SandboxError(
-                "Réponse de la VM invalide (VM éteinte au cours de l'analyse ?)."
+                f"Réponse de la VM invalide (rc {rc}). Dernières lignes : "
+                f"{tail}. État VM : {state}. Vérifiez que la VM est démarrée "
+                "(`vagrant status` / `vagrant up`) et que l'hôte ne s'est pas "
+                "mis en veille pendant l'analyse."
             )
         if not data.get("ok"):
             raise SandboxError(data.get("error", "Échec de la tâche sandbox."))

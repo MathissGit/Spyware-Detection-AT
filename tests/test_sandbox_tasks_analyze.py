@@ -211,6 +211,44 @@ class TestAnalyzeIos:
         assert data["imei"] == "IOSIMEI"
 
 
+class TestStaleTmpDirs:
+    def test_purges_stale_keeps_fresh(self, monkeypatch, tmp_path):
+        stale_dump = tmp_path / "dump_STALE_2020-01-01"
+        stale_dump.mkdir()
+        fresh = tmp_path / "dump_FRESH_2026-01-01"
+        fresh.mkdir()
+        stale_res = tmp_path / "ios_mvt_results_old"
+        stale_res.mkdir()
+        (tmp_path / "notes.txt").write_text("keep me\n")
+        (tmp_path / "dump_im.txt").write_text("fichier, pas dossier\n")
+
+        def fake_mtime(path):
+            name = os.path.basename(str(path))
+            if "STALE_2020-01-01" in name or name == "ios_mvt_results_old":
+                return 0.0
+            return st.time.time()
+
+        monkeypatch.setattr(st, "VM_ROOT", str(tmp_path))
+        monkeypatch.setattr(st.os.path, "getmtime", fake_mtime)
+        st._stale_tmp_dirs()
+        assert not stale_dump.exists()
+        assert not stale_res.exists()
+        assert fresh.exists()
+        assert (tmp_path / "notes.txt").exists()
+        assert (tmp_path / "dump_im.txt").exists()
+
+    def test_getmtime_oserror_ignored(self, monkeypatch, tmp_path):
+        err_dir = tmp_path / "dump_ERR"
+        err_dir.mkdir()
+
+        def boom(path):
+            raise OSError("io")
+        monkeypatch.setattr(st, "VM_ROOT", str(tmp_path))
+        monkeypatch.setattr(st.os.path, "getmtime", boom)
+        st._stale_tmp_dirs()
+        assert err_dir.exists()
+
+
 class TestMainErrorPath:
     def test_command_exception_emits_error(self, monkeypatch, capsys):
         def boom():

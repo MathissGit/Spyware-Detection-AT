@@ -70,6 +70,11 @@ EOF
     cd /vagrant
     chmod +x scripts/launch.sh
     ./scripts/launch.sh cli
+    echo "[*] Durcissement veille / SSH : la VM ne doit jamais dormir..."
+    systemctl mask suspend.target sleep.target hibernate.target hybrid-sleep.target >/dev/null 2>&1 || true
+    mkdir -p /etc/ssh/sshd_config.d
+    printf 'ClientAliveInterval 60\nClientAliveCountMax 4\n' > /etc/ssh/sshd_config.d/99keepalive.conf
+    systemctl restart ssh >/dev/null 2>&1 || systemctl restart sshd >/dev/null 2>&1 || true
     echo "[+] Sandbox prete !"
   SHELL
 end

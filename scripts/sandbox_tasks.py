@@ -125,6 +125,22 @@ def _ioc_args(cmd):
     return cmd, iocs
 
 
+def _stale_tmp_dirs():
+    """Supprime les résidus d'exécutions avortées (> 1 h) dans /vagrant."""
+    if not os.path.isdir(VM_ROOT):
+        return
+    cutoff = time.time() - 3600
+    for name in os.listdir(VM_ROOT):
+        if not name.startswith(("dump_", "ios_mvt_results_")):
+            continue
+        path = os.path.join(VM_ROOT, name)
+        try:
+            if os.path.isdir(path) and os.path.getmtime(path) < cutoff:
+                shutil.rmtree(path, ignore_errors=True)
+        except OSError:
+            continue
+
+
 # ---------------------------------------------------------------- analyze
 def cmd_analyze_android():
     env = os.environ.copy()
@@ -177,6 +193,7 @@ def cmd_analyze_android():
 
 def cmd_analyze_ios():
     password = sys.stdin.readline().strip()
+    _stale_tmp_dirs()
     pair = _bin("idevicepair")
     _emit("[sandbox] Appairage iOS (dans la VM)...")
     deadline = time.monotonic() + 120
@@ -208,7 +225,7 @@ def cmd_analyze_ios():
     _emit("[sandbox] Sauvegarde iOS chiffrée (gardez l'écran allumé)...")
     try:
         subprocess.run(_sudo([backup_bin, "-i", "backup", raw_dir]), env=env,
-                       check=True, timeout=1800)
+                       check=True, timeout=3600)
     except subprocess.CalledProcessError as e:
         shutil.rmtree(raw_dir, ignore_errors=True)
         _result({"ok": False, "error": f"Échec sauvegarde iOS (code {e.returncode})"})

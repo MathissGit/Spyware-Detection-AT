@@ -11,9 +11,6 @@ class StepIndicator(ctk.CTkFrame):
         self.dots = []
         self.lines = []
 
-        header = ctk.CTkLabel(self, text="progression", font=FONT_SMALL, text_color=TEXT_DIM)
-        header.pack(pady=(30, 20), padx=20)
-
         container = ctk.CTkFrame(self, fg_color="transparent")
         container.pack(expand=True, padx=20)
 

@@ -24,6 +24,26 @@ AES_BUFFER_SIZE = 32 * 1024 * 1024
 DATE_STR = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
 
+def _int_setting(name, default):
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+# Compression de l'archive tar.gz : le niveau 9 (défaut) mono-cœur est
+# très lent sur les grosses sauvegardes ; 1 offre la meilleure vitesse
+# (données iOS déjà compressées). Ajustable via MVT_TAR_LEVEL.
+TAR_COMPRESSLEVEL = _int_setting("MVT_TAR_LEVEL", 1)
+# Analyse MVT parallélisée par module (opt-in) : 0 = séquentiel.
+MVT_PARALLEL = _int_setting("MVT_PARALLEL", 0)
+# Timeout d'une analyse sandbox iOS (sauvegarde chiffrée + MVT --fast).
+MVT_SANDBOX_TIMEOUT = _int_setting("MVT_SANDBOX_TIMEOUT", 3600)
+
+
 def _get_bin(name):
     local = f"/usr/local/bin/{name}"
     return local if os.path.exists(local) else name
@@ -113,6 +133,119 @@ def _extract_imei(device_type, mode="direct"):
     return detect_ios_device(mode=mode)[2]
 
 
+def _ioc_args(ioc_files):
+    """Construit les arguments --iocs pour une commande mvt."""
+    args = []
+    for ioc in ioc_files:
+        args += ["--iocs", ioc]
+    return args
+
+
+def _parse_mvt_modules(output):
+    """Extrait les noms de modules depuis la sortie de `--list-modules`."""
+    modules = []
+    for line in output.splitlines():
+        if " - Modules from " in line and ":" in line:
+            tail = line.rsplit(":", 1)[1]
+            for part in tail.split(","):
+                name = part.strip()
+                if name:
+                    modules.append(name)
+    return modules
+
+
+def _run_mvt_parallel(cmd_base, ioc_args, output_dir, log_file, timeout,
+                      workers, cancel_event):
+    """Tente une vérification MVT parallélisée par module.
+
+    Retourne True si réussie, False si annulée (aucun repli), None si
+    impossible/échec (l'appelant doit alors repasser en séquentiel).
+    """
+    try:
+        listing = subprocess.run(
+            cmd_base + ["--list-modules"],
+            capture_output=True, text=True, timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if listing.returncode != 0:
+        return None
+    modules = _parse_mvt_modules((listing.stdout or "") + (listing.stderr or ""))
+    if not modules or workers < 2:
+        return None
+
+    buckets = [[] for _ in range(workers)]
+    for i, name in enumerate(modules):
+        buckets[i % workers].append(name)
+    active = [i for i, bucket in enumerate(buckets) if bucket]
+
+    def _worker(idx, bucket):
+        wdir = os.path.join(output_dir, f"w{idx}")
+        os.makedirs(wdir, exist_ok=True)
+        wlog = f"{log_file}.w{idx}"
+        with open(wlog, "w") as f:
+            for mod in bucket:
+                if cancel_event is not None and cancel_event.is_set():
+                    return
+                res = subprocess.run(
+                    cmd_base + ioc_args + ["--output", wdir, "-m", mod],
+                    stdout=f, stderr=subprocess.STDOUT, timeout=timeout,
+                )
+                if res.returncode != 0:
+                    return
+
+    threads = [threading.Thread(target=_worker, args=(i, buckets[i]))
+               for i in active]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    cancelled = cancel_event is not None and cancel_event.is_set()
+    if cancelled:
+        for i in active:
+            shutil.rmtree(os.path.join(output_dir, f"w{i}"), ignore_errors=True)
+            os.remove(f"{log_file}.w{i}")
+        return False
+
+    for i in active:
+        wdir = os.path.join(output_dir, f"w{i}")
+        if os.path.isdir(wdir):
+            for name in os.listdir(wdir):
+                shutil.copy2(os.path.join(wdir, name), os.path.join(output_dir, name))
+        shutil.rmtree(wdir, ignore_errors=True)
+
+    with open(log_file, "w") as dst:
+        for i in active:
+            with open(f"{log_file}.w{i}") as src:
+                dst.write(src.read())
+            os.remove(f"{log_file}.w{i}")
+    return True
+
+
+def run_mvt_check(cmd_base, ioc_files, output_dir, log_file, timeout=None,
+                  cancel_event=None):
+    """Analyse MVT (mode direct) : parallélisée par module si MVT_PARALLEL>1,
+    sinon séquentielle. Retourne True si l'analyse doit continuer, False si
+    elle a été annulée (aucun repli séquentiel dans ce cas)."""
+    ioc_args = _ioc_args(ioc_files)
+    if MVT_PARALLEL > 1:
+        status = _run_mvt_parallel(
+            cmd_base, ioc_args, output_dir, log_file, timeout,
+            MVT_PARALLEL, cancel_event,
+        )
+        if status is False:
+            return False
+        if status is True:
+            return True
+    with open(log_file, "w") as f:
+        subprocess.run(
+            cmd_base + ioc_args + ["--output", output_dir],
+            stdout=f, stderr=subprocess.STDOUT, timeout=timeout,
+        )
+    return True
+
+
 class AnalysisWorker(threading.Thread):
     def __init__(self, device_type, password, dest_choice, ext_dir=None, mode="direct"):
         super().__init__(daemon=True)
@@ -191,7 +324,7 @@ class AnalysisWorker(threading.Thread):
             result = client.analyze(
                 self.device_type, self.password,
                 live_cb=self._emit_activity, stop_event=self.cancel_event,
-                timeout=1800 if self.device_type == "ios" else 1200,
+                timeout=MVT_SANDBOX_TIMEOUT if self.device_type == "ios" else 1200,
             )
         except SandboxError as e:
             self._emit_progress(1, "error")
@@ -294,12 +427,12 @@ class AnalysisWorker(threading.Thread):
             shutil.move(files_csv, hidden)
             renamed = True
         try:
-            with open(log_file, "w") as f:
-                cmd = ["mvt-android", "check-androidqf", dump_dir]
-                for ioc in IOC_FILES:
-                    cmd += ["--iocs", ioc]
-                cmd += ["--output", mvt_out]
-                subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT, timeout=1800)
+            if not run_mvt_check(
+                ["mvt-android", "check-androidqf", dump_dir],
+                IOC_FILES, mvt_out, log_file,
+                timeout=1800, cancel_event=self.cancel_event,
+            ):
+                return
         finally:
             if renamed and os.path.exists(hidden):
                 shutil.move(hidden, files_csv)
@@ -396,12 +529,12 @@ class AnalysisWorker(threading.Thread):
         mvt_out = os.path.join(SCRIPT_DIR, f"ios_mvt_results_{DATE_STR}")
         os.makedirs(mvt_out, exist_ok=True)
         log_file = os.path.join(SCRIPT_DIR, "mvt_log.txt")
-        with open(log_file, "w") as f:
-            cmd = ["mvt-ios", "check-backup", "-p", self.password, "--fast"]
-            for ioc in IOC_FILES:
-                cmd += ["--iocs", ioc]
-            cmd += ["--output", mvt_out, full_path]
-            subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT, timeout=1800)
+        if not run_mvt_check(
+            ["mvt-ios", "check-backup", "-p", self.password, "--fast", full_path],
+            IOC_FILES, mvt_out, log_file,
+            timeout=1800, cancel_event=self.cancel_event,
+        ):
+            return
         self._emit_progress(2, "done", f"{time.monotonic() - t0:.1f}s")
         if self.cancel_event.is_set():
             return
@@ -578,7 +711,7 @@ h1 {{ color: #2C3E50; border-bottom: 2px solid #3498DB; padding-bottom: 5px; }}
         tar_path = os.path.join(primary, f"{session}.tar.gz")
         enc_path = os.path.join(primary, f"{session}.tar.gz.aes")
 
-        with tarfile.open(tar_path, "w:gz") as tar:
+        with tarfile.open(tar_path, "w:gz", compresslevel=TAR_COMPRESSLEVEL) as tar:
             for folder in folders:
                 if os.path.exists(folder):
                     tar.add(folder, arcname=os.path.basename(folder))
@@ -594,7 +727,10 @@ h1 {{ color: #2C3E50; border-bottom: 2px solid #3498DB; padding-bottom: 5px; }}
 
         if self.dest_choice == "3" and self.ext_dir:
             ext_session = os.path.join(self.ext_dir, "results", session)
-            shutil.copytree(primary, ext_session, dirs_exist_ok=True)
+            os.makedirs(ext_session, exist_ok=True)
+            for name in os.listdir(primary):
+                shutil.copy2(os.path.join(primary, name),
+                             os.path.join(ext_session, name))
 
         return primary
 

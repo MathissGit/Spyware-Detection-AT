@@ -68,7 +68,7 @@ class AnalysisPage(ctk.CTkFrame):
                                             text_color=TEXT_DIM)
         self._activity_label.pack(side="right")
 
-        log_spinner_frame = ctk.CTkFrame(log_frame, fg_color="transparent")
+        log_spinner_frame = ctk.CTkFrame(log_frame, fg_color=BORDER)
         log_spinner_frame.pack(fill="x", padx=12, pady=(0, 4))
         self._spinner = ctk.CTkProgressBar(log_spinner_frame, height=4, fg_color=BORDER,
                                            progress_color=PRIMARY)
@@ -139,21 +139,23 @@ class AnalysisPage(ctk.CTkFrame):
                                              text_color=DANGER)
         self.after(0, _do)
 
+    def _append_log(self, msg):
+        self._log_box.configure(state="normal")
+        current_lines = int(self._log_box.index("end-1c").split(".")[0])
+        if current_lines >= self._log_max_lines:
+            self._log_box.delete("1.0", f"{current_lines - self._log_max_lines + 10}.0")
+        self._log_box.insert("end", msg + "\n")
+        self._log_box.see("end")
+        self._log_box.configure(state="disabled")
+
     def _on_log(self, msg):
-        def _do():
-            self._log_box.configure(state="normal")
-            current_lines = int(self._log_box.index("end-1c").split(".")[0])
-            if current_lines >= self._log_max_lines:
-                self._log_box.delete("1.0", f"{current_lines - self._log_max_lines + 10}.0")
-            self._log_box.insert("end", msg + "\n")
-            self._log_box.see("end")
-            self._log_box.configure(state="disabled")
-        self.after(0, _do)
+        self.after(0, lambda: self._append_log(msg))
 
     def _on_activity(self, msg):
         def _do():
             text = (msg[:80] + "...") if len(msg) > 80 else msg
             self._activity_label.configure(text=text)
+            self._append_log(msg)
         self.after(0, _do)
 
     def _poll_worker(self):

@@ -179,9 +179,58 @@ class TestAnalyze:
         monkeypatch.setattr(
             SandboxClient, "run",
             lambda self, sub, **kw: (0, "no json here\n"))
+        monkeypatch.setattr(SandboxClient, "_vm_state_text",
+                            lambda self: "stopped")
         client = SandboxClient(root="/tmp")
-        with pytest.raises(SandboxError, match="invalide"):
+
+        with pytest.raises(SandboxError) as exc:
             client.analyze("android", "pw")
+        msg = str(exc.value)
+        assert "invalide" in msg
+        assert "stopped" in msg
+
+    def test_no_json_empty_output(self, monkeypatch):
+        monkeypatch.setattr(
+            SandboxClient, "run",
+            lambda self, sub, **kw: (7, ""))
+        monkeypatch.setattr(SandboxClient, "_vm_state_text",
+                            lambda self: "running")
+        client = SandboxClient(root="/tmp")
+        with pytest.raises(SandboxError) as exc:
+            client.analyze("android", "pw")
+        assert "(aucune sortie)" in str(exc.value)
+        assert "rc 7" in str(exc.value)
+
+
+class TestVmStateText:
+    def test_state_found(self, monkeypatch):
+        class FakeProc:
+            returncode = 0
+            stdout = "12345,,state,running\n12346,,state,custom\n"
+            stderr = ""
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: FakeProc())
+        client = SandboxClient(root="/tmp")
+        assert client._vm_state_text() == "running"
+
+    def test_no_state_line(self, monkeypatch):
+        class FakeProc:
+            returncode = 0
+            stdout = "12345,,provider,virtualbox\n"
+            stderr = ""
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: FakeProc())
+        client = SandboxClient(root="/tmp")
+        assert client._vm_state_text() == "inconnu"
+
+    @pytest.mark.parametrize("exc", [
+        FileNotFoundError("vagrant"),
+        subprocess.TimeoutExpired("vagrant", timeout=20),
+    ])
+    def test_error_returns_indisponible(self, monkeypatch, exc):
+        def boom(*a, **kw):
+            raise exc
+        monkeypatch.setattr(subprocess, "run", boom)
+        client = SandboxClient(root="/tmp")
+        assert client._vm_state_text() == "indisponible"
 
 
 class TestRun:
@@ -329,3 +378,26 @@ class TestRun:
         client = SandboxClient(root="/tmp")
         rc, out = client.run("analyze-ios", password="secret")
         assert any("secret" in w for w in written)
+
+    def test_keepalive_options_passed(self, monkeypatch):
+        captured = {}
+
+        class FakeProc:
+            returncode = 0
+            stdout = io.StringIO("RESULT_JSON {\"ok\": true}\n")
+            stdin = None
+
+            def wait(self, timeout=None):
+                pass
+
+        def fake_popen(cmd, **kw):
+            captured["cmd"] = cmd
+            return FakeProc()
+
+        monkeypatch.setattr(subprocess, "Popen", fake_popen)
+        client = SandboxClient(root="/tmp")
+        rc, out = client.run("detect-android")
+        assert rc == 0
+        assert "--" in captured["cmd"]
+        assert "ServerAliveInterval=30" in captured["cmd"]
+        assert "ServerAliveCountMax=120" in captured["cmd"]
