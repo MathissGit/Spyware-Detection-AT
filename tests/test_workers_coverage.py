@@ -380,6 +380,8 @@ class TestRunAndroidBranches:
         monkeypatch.setattr(workers, "LOCAL_DEST_DIR", str(tmp_path / "results"))
         monkeypatch.setattr(workers, "_find_androidqf",
                             lambda: str(tmp_path / "androidqf"))
+        monkeypatch.setattr(workers, "IOC_FILES",
+                            [str(tmp_path / "ioc.stix2")])
         (tmp_path / "mvt_log.txt").write_text("no IoC found\n")
         return tmp_path
 
@@ -488,6 +490,8 @@ class TestRunIosBranches:
         monkeypatch.setattr(workers, "LOCAL_DEST_DIR", str(tmp_path / "results"))
         monkeypatch.setattr(workers, "DATE_STR", "2026-01-01_12-00-00")
         monkeypatch.setattr(workers, "_extract_imei", lambda d: "IOSIMEI")
+        monkeypatch.setattr(workers, "IOC_FILES",
+                            [str(tmp_path / "ioc.stix2")])
         (tmp_path / "mvt_log.txt").write_text("no IoC found\n")
 
     def test_cancel_in_pairing(self, monkeypatch, tmp_path):

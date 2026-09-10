@@ -81,6 +81,7 @@ class TestRunAndroid:
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(cli, "extract_imei", lambda *a, **k: "123456789012345")
         monkeypatch.setattr(cli, "_find_androidqf", lambda: "androidqf")
+        monkeypatch.setattr(cli, "IOC_FILES", [str(tmp_path / "ioc.stix2")])
         calls = []
         def fake_run(cmd, *a, **k):
             calls.append(" ".join(cmd))

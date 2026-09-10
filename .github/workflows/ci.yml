@@ -26,6 +26,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Installer le hook pre-commit
+        run: |
+          ./scripts/setup_hook.sh
+
       - name: Couches 1+2 – tests unitaires et intégration simulée
         run: |
           # xvfb pour les fenêtres customtkinter, sinon les tests GUI sortent en erreur
