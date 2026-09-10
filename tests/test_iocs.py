@@ -7,7 +7,7 @@ import sys
 import conftest
 
 ROOT = conftest.PROJECT_ROOT
-VENV_PY = os.path.join(ROOT, ".venv_forensics", "bin", "python")
+VENV_PY = conftest.PY
 
 
 def _shell_scripts():

@@ -9,6 +9,8 @@ import pytest
 
 import main as cli
 import gui.workers as workers
+import conftest
+PY = conftest.PY
 
 
 class TestIntegrationDirectAndroid:
@@ -181,7 +183,7 @@ class TestIntegrationIocWorkflow:
     def test_dry_run_then_load_mvt(self, tmp_path):
         out_dir = str(tmp_path / "mvt_iocs")
         result = subprocess.run(
-            [os.path.join(ROOT, ".venv_tests", "bin", "python"),
+            [PY,
              os.path.join(ROOT, "scripts", "build_iocs.py"),
              "--dry-run", "--out", out_dir],
             capture_output=True, text=True,
@@ -213,7 +215,7 @@ class TestIntegrationIocWorkflow:
         with open(os.path.join(out_dir, "old.stix2"), "w") as f:
             json.dump(bundle, f)
         result = subprocess.run(
-            [os.path.join(ROOT, ".venv_tests", "bin", "python"),
+            [PY,
              os.path.join(ROOT, "scripts", "build_iocs.py"),
              "check", "--out", out_dir],
             capture_output=True, text=True,

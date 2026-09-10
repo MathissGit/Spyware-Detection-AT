@@ -14,6 +14,22 @@ VENV_PY = os.path.join(PROJECT_ROOT, ".venv_tests", "bin", "python")
 FALLBACK_PY = sys.executable
 
 
+def _running_python():
+    """Interpréteur à utiliser pour lancer les exécutables du projet."""
+    candidates = [
+        VENV_PY,
+        os.path.join(PROJECT_ROOT, ".venv_forensics", "bin", "python"),
+        FALLBACK_PY,
+    ]
+    for cand in candidates:
+        if os.path.exists(cand):
+            return cand
+    return FALLBACK_PY
+
+
+PY = _running_python()
+
+
 def write_temp_json(tmp_path, data):
     p = tmp_path / "data.json"
     p.write_text(json.dumps(data), encoding="utf-8")

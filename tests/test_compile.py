@@ -8,7 +8,8 @@ import sys
 import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = os.path.join(ROOT, ".venv_tests", "bin", "python")
+import conftest
+PY = conftest.PY
 
 EXCLUDE_DIRS = {
     ".venv_forensics", ".venv_tests", ".git", ".vagrant",

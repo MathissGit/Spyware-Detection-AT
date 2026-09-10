@@ -10,9 +10,10 @@ import subprocess
 import sys
 
 import pytest
+import conftest
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-VENV_PY = os.path.join(ROOT, ".venv_tests", "bin", "python")
+ROOT = conftest.PROJECT_ROOT
+VENV_PY = conftest.PY
 
 
 class TestBuildIocsReal:
