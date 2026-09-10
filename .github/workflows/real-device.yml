@@ -1,0 +1,25 @@
+name: CI – Appareils réels
+
+# Exécution manuelle des tests d'intégration nécessitant du matériel
+# (@pytest.mark.real_android / real_ios). À lancer sur un runner
+# self-hosted avec les appareils branchés. Sans matériel, ces tests
+# sont automatiquement ignorés (voir TEST_STRATEGY.md) : ce workflow
+# n'est donc pas une « désélection » de la barrière officielle.
+on:
+  workflow_dispatch:
+
+jobs:
+  real-device:
+    runs-on: [self-hosted]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installer les dépendances
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Tests d'intégration réels (Android + iOS)
+        run: |
+          python -m pytest tests/ -m "real_android or real_ios" \
+            --no-header -q -p no:cacheprovider

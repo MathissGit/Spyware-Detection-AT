@@ -1,0 +1,128 @@
+#!/bin/bash
+set -e
+
+# Résoudre la racine du projet même quand le hook est exécuté via un lien
+# symbolique (ex. .git/hooks/pre-commit -> .githooks/pre-commit)
+SOURCE="$0"
+while [ -L "$SOURCE" ]; do
+    DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+    NEXT="$(readlink "$SOURCE")"
+    case "$NEXT" in
+        /*) SOURCE="$NEXT" ;;
+        *)  SOURCE="$DIR/$NEXT" ;;
+    esac
+done
+HOOK_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+ROOT="$(dirname "$HOOK_DIR")"
+cd "$ROOT"
+
+echo ""
+echo "============================================="
+echo "  Tests de non-régression "
+echo "============================================="
+
+# Choix d'un environnement Python disposant de pytest
+PY=""
+for VENV in "$ROOT/.venv_forensics" "$ROOT/.venv_tests"; do
+    if [ -x "$VENV/bin/python" ] && "$VENV/bin/python" -c "import pytest, pytest_cov" >/dev/null 2>&1; then
+        PY="$VENV/bin/python"
+        break
+    fi
+done
+if [ -z "$PY" ]; then
+    if $ROOT/.venv_tests/bin/python -c "import pytest" >/dev/null 2>&1; then
+        PY="$ROOT/.venv_tests/bin/python"
+        echo "[*] Installation de pytest-cov dans .venv_tests..."
+        "$PY" -m pip install -q pytest-cov 2>/dev/null || true
+    else
+        PY="python3"
+    fi
+fi
+
+if ! "$PY" -m pytest --version >/dev/null 2>&1; then
+    echo "[!] pytest indisponible. Essayez : pip install pytest pytest-cov"
+    exit 1
+fi
+
+# Vérification de la syntaxe shell de tous les scripts .sh + Vagrantfile
+echo "[*] Vérification de la syntaxe des scripts shell..."
+shopt -s nullglob
+FAILED=0
+for script in scripts/*.sh *.sh .githooks/pre-commit; do
+    if [ -f "$script" ]; then
+        if ! bash -n "$script" 2>/dev/null; then
+            echo "    [!] Erreur de syntaxe : $script"
+            FAILED=1
+        fi
+    fi
+done
+if [ -f Vagrantfile ]; then
+    if grep -q "Vagrant.configure" Vagrantfile; then
+        :
+    else
+        echo "    [!] Vagrantfile invalide"
+        FAILED=1
+    fi
+fi
+shopt -u nullglob
+if [ "$FAILED" -ne 0 ]; then echo "[!] Erreur de syntaxe shell. Commit annulé."; exit 1; fi
+
+# Vérification shebang + exécutabilité des scripts
+echo "[*] Vérification des shebangs et de l'exécutabilité..."
+FAILED=0
+for script in scripts/launch.sh scripts/setup_hook.sh scripts/update_iocs.sh \
+              setup.sh start_analysis.sh .githooks/pre-commit; do
+    if [ ! -f "$script" ]; then
+        continue
+    fi
+    if [ ! -x "$script" ]; then
+        echo "    [!] $script n'est pas exécutable (chmod +x)"
+        FAILED=1
+        continue
+    fi
+    if ! head -n 1 "$script" | grep -q "^#!"; then
+        echo "    [!] $script n'a pas de shebang"
+        FAILED=1
+    fi
+done
+for script in scripts/build_iocs.py scripts/sandbox_tasks.py; do
+    if [ ! -f "$script" ]; then
+        continue
+    fi
+    if [ ! -x "$script" ] && ! head -n 1 "$script" | grep -q "^#!"; then
+        echo "    [!] $script n'est ni exécutable ni shebang"
+        FAILED=1
+    fi
+done
+if [ "$FAILED" -ne 0 ]; then echo "[!] Shebang/exécutabilité invalides. Commit annulé."; exit 1; fi
+
+# ============================================================
+# Barème de qualité (voir TEST_STRATEGY.md) :
+#   Couche 1 - Tests unitaires            (doivent passer)
+#   Couche 2 - Tests d'intégration simulée (doivent passer)
+#   Couche 3 - Non-régression : couverture 100 % du code livré
+# Aucune désélection de test n'est autorisée (-k/-m/--ignore).
+# ============================================================
+
+echo "[*] Couche 1+2 : exécution de la suite pytest (aucune désélection)..."
+OUT="$("$PY" -m pytest tests/ --cov=main --cov=gui --cov=scripts \
+    --cov-report=term --cov-fail-under=100 -q -p no:cacheprovider 2>&1)"
+STATUS=$?
+echo "$OUT"
+if [ "$STATUS" -ne 0 ]; then
+    echo ""
+    echo "[!] Couche 1+2 en échec. Commit annulé."
+    exit 1
+fi
+
+echo "[*] Couche 3 : vérification de la couverture à 100 %..."
+if ! echo "$OUT" | grep -q "100.00%"; then
+    echo ""
+    echo "[!] Couverture < 100 %. Ajoutez les tests manquants (voir TEST_STRATEGY.md). Commit annulé."
+    exit 1
+fi
+
+echo ""
+echo "[+] Couche 1 (tests unitaires) : OK"
+echo "[+] Couche 2 (tests d'intégration simulés) : OK"
+echo "[+] Couche 3 (non-régression, couverture 100 %) : OK"

@@ -1,0 +1,44 @@
+name: CI – Tests 3 niveaux
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: Tests 3 niveaux
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Installer les dépendances
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Couches 1+2 – tests unitaires et intégration simulée
+        run: |
+          # xvfb pour les fenêtres customtkinter, sinon les tests GUI sortent en erreur
+          sudo apt-get update && sudo apt-get install -y xvfb
+          xvfb-run -a python -m pytest tests/ \
+            --cov=main --cov=gui --cov=scripts \
+            --cov-report=term-missing --cov-fail-under=100 -q
+
+      - name: Couche 3 – vérifier l'absence de désélection et la couverture 100 %
+        run: |
+          OUT="$(xvfb-run -a python -m pytest tests/ --cov=main --cov=gui --cov=scripts \
+            --cov-report=term --cov-fail-under=100 -q 2>&1)"
+          STATUS=$?
+          echo "$OUT"
+          echo "$OUT" | grep -q "100.00%" || { echo "Couverture < 100 %"; exit 1; }
+          exit "$STATUS"
