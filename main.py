@@ -24,6 +24,8 @@ SYSTEM = platform.system()
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 LOCAL_DEST_DIR = os.path.join(SCRIPT_DIR, "results")
 IOCS_DIR = os.path.join(SCRIPT_DIR, "mvt_iocs")
+os.environ.setdefault("MVT_STIX2", IOCS_DIR)
+IOC_FILES = sorted(glob.glob(os.path.join(IOCS_DIR, "*.stix2")))
 DATE_STR = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 AES_BUFFER_SIZE = 32 * 1024 * 1024
 
@@ -76,13 +78,6 @@ def get_external_drives():
         volumes_path = "/Volumes"
         if os.path.exists(volumes_path):
             drives = [os.path.join(volumes_path, d) for d in os.listdir(volumes_path) if os.path.isdir(os.path.join(volumes_path, d)) and d != "Macintosh HD"]
-    elif SYSTEM == "Windows":
-        import ctypes
-        bitmask = ctypes.windll.kernel32.GetLogicalDrives()
-        for letter in range(26):
-            if bitmask & (1 << letter):
-                drive = f"{chr(65 + letter)}:\\"
-                if drive != "C:\\" and os.path.exists(drive): drives.append(drive)
     return drives
 
 def get_user_inputs():
@@ -171,9 +166,6 @@ def extract_imei(device_type):
 # Moteurs d'Extraction & Analyse
 # ==========================================
 def _find_androidqf():
-    if SYSTEM == "Windows":
-        candidates = glob.glob("androidqf*.exe")
-        return next(iter(candidates), "androidqf.exe")
     candidates = glob.glob("androidqf*")
     return "./" + candidates[0] if candidates else "./androidqf"
 
@@ -216,7 +208,11 @@ def run_android():
 
     try:
         with open(log_file, "w") as f:
-            subprocess.run(["mvt-android", "check-androidqf", dump_dir, "--iocs", IOCS_DIR, "--output", mvt_out_dir], stdout=f, stderr=subprocess.STDOUT)
+            cmd = ["mvt-android", "check-androidqf", dump_dir]
+            for ioc in IOC_FILES:
+                cmd += ["--iocs", ioc]
+            cmd += ["--output", mvt_out_dir]
+            subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT)
     finally:
         if os.path.exists(hidden_files):
             shutil.move(hidden_files, files_csv)
@@ -274,10 +270,48 @@ def run_ios(password):
 
     console.print("[bold purple][*] Analyse des IOC en cours...[/bold purple]")
     with open(log_file, "w") as f:
-        subprocess.run(["mvt-ios", "check-backup", "-p", password, "--fast", "--iocs", IOCS_DIR, "--output", mvt_out_dir, full_backup_path], stdout=f, stderr=subprocess.STDOUT)
+        cmd = ["mvt-ios", "check-backup", "-p", password, "--fast"]
+        for ioc in IOC_FILES:
+            cmd += ["--iocs", ioc]
+        cmd += ["--output", mvt_out_dir, full_backup_path]
+        subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT)
     phase_timer.mark("MVT iOS analyse")
 
     return [raw_backup_dir, mvt_out_dir], log_file, device_imei
+
+def run_sandbox(device_type, password):
+    """Mode sandbox : l'extraction et l'analyse MVT s'effectuent dans la VM
+    (dossier partagé /vagrant == SCRIPT_DIR côté hôte), le rapport et le
+    packaging restent sur l'hôte."""
+    from gui.sandbox_client import SandboxClient, SandboxError
+
+    dtype = "android" if device_type == "1" else "ios"
+    client = SandboxClient()
+    try:
+        client.ensure_up()
+    except SandboxError as e:
+        console.print(f"[bold red][!] {e}[/bold red]")
+        sys.exit(1)
+
+    console.print(f"[bold cyan][*] Analyse dans la VM sandbox ({dtype})...[/bold cyan]")
+    try:
+        result = client.analyze(dtype, password,
+                                live_cb=lambda line: console.print(f"[dim]{line}[/dim]"),
+                                timeout=1800)
+    except SandboxError as e:
+        console.print(f"[bold red][!] {e}[/bold red]")
+        sys.exit(1)
+
+    imei = result.get("imei", "UNKNOWN-IMEI")
+    log_file = os.path.join(SCRIPT_DIR, result.get("log_file", "mvt_log.txt"))
+    if dtype == "android":
+        folders = [os.path.join(SCRIPT_DIR, result["dump_dir"]),
+                   os.path.join(SCRIPT_DIR, result["mvt_out"])]
+    else:
+        folders = [os.path.join(SCRIPT_DIR, result["raw_dir"]),
+                   os.path.join(SCRIPT_DIR, result["mvt_out"])]
+    console.print(f"[bold green][+] Extraction/analyse terminées (IMEI: {imei}).[/bold green]")
+    return folders, log_file, imei
 
 # ==========================================
 # Post-Processing & Reporting (Strict IOC)
@@ -489,12 +523,21 @@ def secure_direct_packaging(folders_to_archive, password, dest_choice, ext_dir, 
 # Main
 # ==========================================
 if __name__ == "__main__":
-    os.system('cls' if SYSTEM == 'Windows' else 'clear')
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Outil forensique automatisé (MVT)")
+    parser.add_argument("--mode", choices=["direct", "sandbox"], default="direct",
+                        help="Mode d'exécution (défaut: direct)")
+    cli_args = parser.parse_args()
+
+    os.system('clear')
     show_banner()
 
     dev_type, dest, ext, pwd = get_user_inputs()
 
-    if dev_type == "1":
+    if cli_args.mode == "sandbox":
+        folders, log, imei_val = run_sandbox(dev_type, pwd)
+    elif dev_type == "1":
         folders, log, imei_val = run_android()
     else:
         folders, log, imei_val = run_ios(pwd)

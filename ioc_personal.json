@@ -1,0 +1,32 @@
+{
+  "indicators": [
+    {
+      "name": "ExempleSpyware",
+      "names": [
+        "AliasSpyware"
+      ],
+      "type": "stalkerware",
+      "packages": [
+        "com.exemple.spyware1",
+        "com.exemple.spyware2"
+      ],
+      "certificates": [
+        "0123456789ABCDEFFEDCBA9876543210AAAAAAAA"
+      ],
+      "websites": [
+        "exemple-spyware.com"
+      ],
+      "distribution": [
+        "telechargement.exemple-spyware.com"
+      ],
+      "c2": {
+        "domains": [
+          "c2.exemple-spyware.com"
+        ],
+        "ips": [
+          "203.0.113.10"
+        ]
+      }
+    }
+  ]
+}

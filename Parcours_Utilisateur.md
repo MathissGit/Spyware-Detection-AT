@@ -1,7 +1,7 @@
 # Parcour Utilisateur
 ## Phase 1 : Lancement (~8 min)
 
-L'utilisateur lance `start_analysis.sh` ou `start_analysis.bat`.
+L'utilisateur lance `start_analysis.sh`.
 
 **Ce qui se passe :**
 1. Le script detecte le mode d'installation (Sandbox ou Direct).

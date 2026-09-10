@@ -1,0 +1,24 @@
+{
+  "sources": [
+    {
+      "name": "AssoEchap/stalkerware-indicators (ioc.yaml)",
+      "type": "yaml",
+      "github": {
+        "owner": "AssoEchap",
+        "repo": "stalkerware-indicators",
+        "branch": "master",
+        "path": "ioc.yaml"
+      }
+    },
+    {
+      "name": "AssoEchap/stalkerware-indicators (STIX2)",
+      "type": "stix2",
+      "github": {
+        "owner": "AssoEchap",
+        "repo": "stalkerware-indicators",
+        "branch": "master",
+        "path": "generated/stalkerware.stix2"
+      }
+    }
+  ]
+}
